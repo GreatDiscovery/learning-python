@@ -1,3 +1,4 @@
+import datetime
 from contextlib import contextmanager
 
 # reference https://github.com/MaiXiaochai/MySQLUtils/blob/master/mysql_pool.py
@@ -98,3 +99,17 @@ class MySQLConnectionPool:
 
     def __del__(self):
         self.close()
+
+if __name__ == '__main__':
+    # 补齐参数
+    pool = MySQLConnectionPool(None)
+    cluster_name = 'rec-arcade-shadow-cache'
+    version = 1
+    sql = f"select update_time from redis_cluster where name = '{cluster_name}' and version = {version}  limit 1"
+    print(sql)
+    results = pool.fetchall(sql)
+    row = results[0]
+    if row['update_time'] + datetime.timedelta(days=1) < datetime.datetime.now():
+        print(row['update_time'])
+        print(row['update_time'] + datetime.timedelta(days=1))
+        print(datetime.datetime.now())
