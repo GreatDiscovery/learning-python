@@ -1,3 +1,4 @@
+import json
 import unittest
 
 
@@ -12,3 +13,23 @@ class TestStrExample(unittest.TestCase):
         print(run_info)
         run_info = "{\"run_time_info\": {\"cluster_name\": \"%s-%s/,/%s-%s\"}}" % ("fls-review", 1, "fls-review", 1)
         print(run_info)
+        value = "{\"cluster_name\": \"%s-%s/,/%s-%s\"}" % ("fls-review", 1, "fls-review", 1)
+        payload = {'run_time_info': value}
+        print(json.dumps(payload))
+        source_cluster = "fls-review"
+        source_version = 1
+        dest_cluster = "fls-review"
+        dest_version = 1
+        str1 = f"{source_cluster}-{source_version}/,/{dest_cluster}-{dest_version}"
+        map_value = {"cluster_name": str1}
+        payload = {"run_time_info": map_value}
+        print(json.dumps(payload))
+        cluster_dict = {"cluster_name": f"{source_cluster}-{source_version}"}
+        print(cluster_dict)
+
+    def testStrNoneOrEmpty(self):
+        str1 = None
+        str2 = ""
+        if str1:
+            print(len(str1))
+        print(len(str2))
