@@ -10,3 +10,4 @@ class TestDictExample(unittest.TestCase):
 
         print("tinydict['Age']: ", tinydict['Age'])
         print("tinydict['School']: ", tinydict['School'])
+        print(len(tinydict))

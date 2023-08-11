@@ -1,3 +1,4 @@
+import time
 import unittest
 from datetime import datetime, timedelta
 
@@ -26,3 +27,6 @@ class TestDateExample(unittest.TestCase):
 
         date3 = date1 + timedelta(days=1)
         print(date3)
+
+        # 打印时间戳
+        print(int(time.time()))
