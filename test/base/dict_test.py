@@ -11,3 +11,8 @@ class TestDictExample(unittest.TestCase):
         print("tinydict['Age']: ", tinydict['Age'])
         print("tinydict['School']: ", tinydict['School'])
         print(len(tinydict))
+
+    def test_list(self):
+        arr = [5, 3, 4, 1, 2]
+        for i in arr:
+            print(i)
