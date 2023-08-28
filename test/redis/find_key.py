@@ -18,6 +18,7 @@ if __name__ == '__main__':
     """
     cluster_nodes = conn.cluster("nodes")
     slot_pos = conn.cluster("keyslot", args.key)
+    print(f'slot={slot_pos}')
     for node in cluster_nodes:
         outer_arr = cluster_nodes[node]['slots']
         for inner_arr in outer_arr:
