@@ -1,6 +1,8 @@
 # encoding: utf-8
 import redis
 
+# 批量刷入redis数据
+
 if __name__ == '__main__':
     source_host = "127.0.0.1"
     port = 6379
