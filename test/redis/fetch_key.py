@@ -1,20 +1,22 @@
 # encoding: utf-8
 import redis
-
+from rediscluster import RedisCluster
 # 给出一份key的文件，拉出所有key的数据并保存到文件里
 
-source_host = "127.0.0.1"
+source_host = "10.0.21.150"
 port = 6379
-conn = redis.Redis(host=source_host, port=port, db=0)
-key_file = "/Users/jiayun/Downloads/tmp/1.csv"
-saved_file = "/Users/jiayun/Downloads/tmp/save.csv"
+startup_nodes = [{"host": source_host, "port": port}]
+conn = RedisCluster(startup_nodes=startup_nodes, decode_responses=True)
+# conn = redis.Redis(host=source_host, port=port, db=0)
+key_file = "/tmp/bas_rm_key_new.csv"
+saved_file = "/tmp/bas_rm_key_new_save.csv"
 
 
 def print_key_value(keys, responses):
     lines = []
     for index in range(len(keys)):
         key = keys[index]
-        value = ','.join(item.decode('utf-8') for item in responses[index])
+        value = ','.join(str(item) for item in responses[index])
         if value:
             line = f'{key} {value}'
             lines.append(line)
@@ -35,7 +37,7 @@ if __name__ == '__main__':
             line = line.replace("\"", "")
             keys.append(line)
             pipeline.smembers(line)
-            if count > 10000:
+            if count > 10:
                 print(f'batch={batch}')
                 responses = pipeline.execute()
                 lines = print_key_value(keys, responses)
@@ -46,6 +48,7 @@ if __name__ == '__main__':
                 keys = []
                 batch = batch + 1
                 pipeline = conn.pipeline()
+
         responses = pipeline.execute()
         lines = print_key_value(keys, responses)
         for l in lines:
