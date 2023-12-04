@@ -33,17 +33,15 @@ class BaseModify:
     def update_image(self, opts: argparse.Namespace):
         raise Exception("non-implementation")
 
-    def get_pod_client(self, zone: str):
-        if zone not in Zone:
-            raise Exception(f"invalid zone={zone}")
-        config.load_kube_config()
+    def get_pod_client(self, zone: str, config_file: str):
+        config.load_kube_config(config_file=config_file)
         v1 = client.CoreV1Api()
         return v1
 
-    def get_sts_client(self, zone: str):
+    def get_sts_client(self, zone: str, config_file: str):
         if zone not in Zone:
             raise Exception(f"invalid zone={zone}")
-        config.load_kube_config()
+        config.load_kube_config(config_file=config_file)
         v1 = client.AppsV1Api
         return v1
 
@@ -58,7 +56,7 @@ class PodModify(BaseModify):
         container_name = opts.container
         image = opts.image
 
-        k8s_client = super().get_pod_client(opts.zone)
+        k8s_client = super().get_pod_client(opts.zone, opts.k8s_config)
         if pod_name:
             pod = k8s_client.read_namespaced_pod(name=pod_name, namespace=opts.namespace)
             self.update_one_pod_image(k8s_client, pod, container_name, image)
@@ -98,7 +96,7 @@ class StsModify(BaseModify):
         image = opts.image
         container_name = opts.container
 
-        k8s_client = super().get_sts_client(opts.zone)
+        k8s_client = super().get_sts_client(opts.zone, opts.k8s_config)
         if sts_name:
             sts = k8s_client.read_namespaced_stateful_set(name=sts_name, namespace=opts.namespace)
             self.updaate_one_sts_image(k8s_client, sts, container_name, image)
@@ -130,14 +128,15 @@ def check_k8s_labels(labels: str):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='update image for pod/sts/deploy.')
-    parser.add_argument('-z', '--zone', type=Zone, choices=list(Zone), help='select zone, example: Zone.QC_SH4C',
+    parser.add_argument('-z', '--zone', type=str, choices=[zone.value for zone in Zone],
+                        help='select zone, example: qcsh4c',
                         required=True)
     parser.add_argument('-ns', '--namespace', type=str, help='k8s namespace', default='default', required=True)
-    parser.add_argument('-r', '--resource', type=Resource, choices=list(Resource),
-                        help='k8s resource, example: Resource.Pod',
+    parser.add_argument('-r', '--resource', type=str, choices=[resource.value for resource in Resource],
+                        help='k8s resource, example: pod',
                         required=True)
     parser.add_argument('-i', '--image', type=str, help='k8s image name, example: ubuntu:latest', required=True)
-    parser.add_argument('-k', '--k8s-config', type=str, help='k8s config file, example: ~/.kube/config', required=True)
+    parser.add_argument('-k', '--k8s_config', type=str, help='k8s config file, example: ~/.kube/config', required=True)
     parser.add_argument('-n', '--name', type=str, help='k8s resource name, example: test1-pod')
     parser.add_argument('-c', '--container', type=str, help='container name, example: test1-container', required=True)
     parser.add_argument('-l', '--label', type=str, help='k8s filter label, example: env=test')
