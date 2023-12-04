@@ -9,8 +9,9 @@ from kubernetes.client import ApiException
 
 
 # 更新一个redis集群的镜像，包括pod/sts/deploy等资源
-# require k8s config
-# usage: python3
+# usage: python3 update_image.py -z qcsh4c -k
+# /home/deploy/.kube/config -r sts -n k8redis-1-2 -c k8redis-1 -i
+# ubuntu:v9.9.9
 
 
 class Zone(Enum):
@@ -63,11 +64,11 @@ class PodModify(BaseModify):
         if len(pod.spec.containers) <= 1:
             raise Exception("forbidden to modify pod image, only 1 container")
         container_found = False
-        for index in range(pod.spec.containers):
+        for index in range(pod.spec.template.spec.containers):
             # don't modify main container's image
             if index == 0:
                 continue
-            container = pod.spec.containers[index]
+            container = pod.spec.template.containers[index]
             if container.name == container_name:
                 container.image = image
                 container_found = True
@@ -97,13 +98,13 @@ class StsModify(BaseModify):
     def update_one_sts_image(self, k8s_client, sts, container_name, new_image):
         print(f"start to modify sts {sts.metadata.name} image to {new_image} ")
         container_found = False
-        for container in sts.spec.containers:
+        for container in sts.spec.template.spec.containers:
             if container.name == container_name:
                 container.image = new_image
                 container_found = True
                 break
         if container_found:
-            k8s_client.patch_namespaced_stateful_set(name=sts.metadata.name, namespace=sts.metadata.namespace)
+            k8s_client.patch_namespaced_stateful_set(name=sts.metadata.name, namespace=sts.metadata.namespace, body=sts)
             print(f"succeed in modifying sts {sts.metadata.name} image to {new_image} ")
         else:
             raise Exception("container not found")
