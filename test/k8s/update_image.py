@@ -17,7 +17,6 @@ class Zone(Enum):
     QC_SH4C = "qcsh4c"
 
 
-
 # k8s resource
 class Resource(Enum):
     Pod = "pod"
@@ -39,10 +38,8 @@ class BaseModify:
         return v1
 
     def get_sts_client(self, zone: str, config_file: str):
-        if zone not in Zone:
-            raise Exception(f"invalid zone={zone}")
         config.load_kube_config(config_file=config_file)
-        v1 = client.AppsV1Api
+        v1 = client.AppsV1Api()
         return v1
 
 
@@ -51,18 +48,14 @@ class PodModify(BaseModify):
         return "Pod"
 
     def update_image(self, opts: argparse.Namespace):
-        label_selector = opts.label
         pod_name = opts.name
         container_name = opts.container
         image = opts.image
 
-        k8s_client = super().get_pod_client(opts.zone, opts.k8s_config)
+        k8s_client = super().get_pod_client(opts.zone, opts.kubeconfig)
         if pod_name:
-            pod = k8s_client.read_namespaced_pod(name=pod_name, namespace=opts.namespace)
-            self.update_one_pod_image(k8s_client, pod, container_name, image)
-        elif label_selector:
-            pod_list = k8s_client.list_namespaced_pod(opts.namespace, label_selector=label_selector)
-            for pod in pod_list:
+            for name in str.split(pod_name, ","):
+                pod = k8s_client.read_namespaced_pod(name=name, namespace=opts.namespace)
                 self.update_one_pod_image(k8s_client, pod, container_name, image)
 
     def update_one_pod_image(self, k8s_client, pod, container_name, image):
@@ -91,18 +84,14 @@ class StsModify(BaseModify):
         return "StatefulSet"
 
     def update_image(self, opts: argparse.Namespace):
-        label_selector = opts.label
         sts_name = opts.name
         image = opts.image
         container_name = opts.container
 
-        k8s_client = super().get_sts_client(opts.zone, opts.k8s_config)
+        k8s_client = super().get_sts_client(opts.zone, opts.kubeconfig)
         if sts_name:
-            sts = k8s_client.read_namespaced_stateful_set(name=sts_name, namespace=opts.namespace)
-            self.update_one_sts_image(k8s_client, sts, container_name, image)
-        elif label_selector:
-            sts_list = k8s_client.list_namespaced_stateful_set(namespace=opts.namespace, label_selector=label_selector)
-            for sts in sts_list:
+            for name in str.split(sts_name, ","):
+                sts = k8s_client.read_namespaced_stateful_set(name=name, namespace=opts.namespace)
                 self.update_one_sts_image(k8s_client, sts, container_name, image)
 
     def update_one_sts_image(self, k8s_client, sts, container_name, new_image):
@@ -120,10 +109,9 @@ class StsModify(BaseModify):
             raise Exception("container not found")
 
 
-def check_k8s_labels(labels: str):
-    if labels == "":
-        raise Exception("labels is empty")
-    # todo check format
+def check_image_format(image: str):
+    if image == "":
+        raise Exception("image is empty")
 
 
 if __name__ == '__main__':
@@ -131,20 +119,21 @@ if __name__ == '__main__':
     parser.add_argument('-z', '--zone', type=str, choices=[zone.value for zone in Zone],
                         help='select zone, example: qcsh4c',
                         required=True)
-    parser.add_argument('-ns', '--namespace', type=str, help='k8s namespace', default='default', required=True)
+    parser.add_argument('-k', '--kubeconfig', type=str, help='k8s config file, example: ~/.kube/config', required=True)
+    parser.add_argument('-ns', '--namespace', type=str, help='k8s namespace', default='default')
     parser.add_argument('-r', '--resource', type=str, choices=[resource.value for resource in Resource],
                         help='k8s resource, example: pod',
                         required=True)
-    parser.add_argument('-i', '--image', type=str, help='k8s image name, example: ubuntu:latest', required=True)
-    parser.add_argument('-k', '--k8s_config', type=str, help='k8s config file, example: ~/.kube/config', required=True)
-    parser.add_argument('-n', '--name', type=str, help='k8s resource name, example: test1-pod')
+    parser.add_argument('-n', '--name', type=str, help='k8s resource name, example: test1-pod,test2-pod')
     parser.add_argument('-c', '--container', type=str, help='container name, example: test1-container', required=True)
-    parser.add_argument('-l', '--label', type=str, help='k8s filter label, example: env=test')
+    # don't use label, not unique
+    # parser.add_argument('-l', '--label', type=str, help='k8s filter label, example: env=test')
+    parser.add_argument('-i', '--image', type=str, help='k8s image name, example: ubuntu:latest', required=True)
     args = parser.parse_args()
 
-    if args.label:
-        check_k8s_labels(args.label)
-    if args.resource.value == Resource.Pod.value:
+    if args.image:
+        check_image_format(args.image)
+    if args.resource == Resource.Pod.value:
         PodModify().update_image(args)
     elif args.resource == Resource.StatefulSet.value:
         StsModify().update_image(args)
