@@ -99,11 +99,11 @@ class StsModify(BaseModify):
         k8s_client = super().get_sts_client(opts.zone, opts.k8s_config)
         if sts_name:
             sts = k8s_client.read_namespaced_stateful_set(name=sts_name, namespace=opts.namespace)
-            self.updaate_one_sts_image(k8s_client, sts, container_name, image)
+            self.update_one_sts_image(k8s_client, sts, container_name, image)
         elif label_selector:
             sts_list = k8s_client.list_namespaced_stateful_set(namespace=opts.namespace, label_selector=label_selector)
             for sts in sts_list:
-                self.updaate_one_sts_image(k8s_client, sts, container_name, image)
+                self.update_one_sts_image(k8s_client, sts, container_name, image)
 
     def update_one_sts_image(self, k8s_client, sts, container_name, new_image):
         print(f"start to modify sts {sts.metadata.name} image to {new_image} ")
