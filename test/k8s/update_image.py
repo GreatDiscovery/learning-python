@@ -8,10 +8,17 @@ import redis
 from kubernetes.client import ApiException
 
 
-# 更新一个redis集群的镜像，包括pod/sts/deploy等资源
-# usage: python3 update_image.py -z qcsh4c -k
-# /home/deploy/.kube/config -r sts -n k8redis-1-2 -c k8redis-1 -i
-# ubuntu:v9.9.9
+# feature1: update k8s pod/sts image
+# usage: python3 update_image.py  update-image -z qcsh4c -k /home/deploy/.kube/config -r sts -n k8redis-1-2 -c k8redis-1 -i ubuntu:v9.9.9
+
+
+def update_image(opts):
+    if opts.image:
+        check_image_format(opts.image)
+    if opts.resource == Resource.Pod.value:
+        PodModify().update_image(opts)
+    elif opts.resource == Resource.StatefulSet.value:
+        StsModify().update_image(opts)
 
 
 class Zone(Enum):
@@ -116,25 +123,39 @@ def check_image_format(image: str):
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='update image for pod/sts/deploy.')
-    parser.add_argument('-z', '--zone', type=str, choices=[zone.value for zone in Zone],
-                        help='select zone, example: qcsh4c',
-                        required=True)
-    parser.add_argument('-k', '--kubeconfig', type=str, help='k8s config file, example: ~/.kube/config', required=True)
-    parser.add_argument('-ns', '--namespace', type=str, help='k8s namespace', default='default')
-    parser.add_argument('-r', '--resource', type=str, choices=[resource.value for resource in Resource],
-                        help='k8s resource, example: pod',
-                        required=True)
-    parser.add_argument('-n', '--name', type=str, help='k8s resource name, example: test1-pod,test2-pod')
-    parser.add_argument('-c', '--container', type=str, help='container name, example: test1-container', required=True)
-    # don't use label, not unique
-    # parser.add_argument('-l', '--label', type=str, help='k8s filter label, example: env=test')
-    parser.add_argument('-i', '--image', type=str, help='k8s image name, example: ubuntu:latest', required=True)
-    args = parser.parse_args()
+    parser = argparse.ArgumentParser(description='manipulate pod/sts/deploy.')
+    subparser = parser.add_subparsers(dest="subcmd", title="subcmd")
 
-    if args.image:
-        check_image_format(args.image)
-    if args.resource == Resource.Pod.value:
-        PodModify().update_image(args)
-    elif args.resource == Resource.StatefulSet.value:
-        StsModify().update_image(args)
+    update_image_cmd = subparser.add_parser("update-image", help="update image for pod/sts/deploy.")
+    update_image_cmd.add_argument('-z', '--zone', type=str, choices=[zone.value for zone in Zone],
+                                  help='select zone, example: qcsh4c',
+                                  required=True)
+    update_image_cmd.add_argument('-k', '--kubeconfig', type=str, help='k8s config file, example: ~/.kube/config',
+                                  required=True)
+    update_image_cmd.add_argument('-ns', '--namespace', type=str, help='k8s namespace', default='default')
+    update_image_cmd.add_argument('-r', '--resource', type=str, choices=[resource.value for resource in Resource],
+                                  help='k8s resource, example: pod',
+                                  required=True)
+    update_image_cmd.add_argument('-n', '--name', type=str, help='k8s resource name list, example: test1-pod,test2-pod')
+    update_image_cmd.add_argument('-c', '--container', type=str, help='container name, example: test1-container',
+                                  required=True)
+    # don't use label, not unique
+    # update_image_cmd.add_argument('-l', '--label', type=str, help='k8s filter label, example: env=test')
+    update_image_cmd.add_argument('-i', '--image', type=str, help='k8s image name, example: ubuntu:latest',
+                                  required=True)
+    update_image_cmd.set_defaults(func=update_image)
+
+    # restart_sidecar_cmd = subparser.add_parser("restart-sidecar",
+    #                                            help="restart sidecar container, forbidden to restart main container in pod.")
+    # restart_sidecar_cmd.add_argument('-k', '--kubeconfig', type=str, help='k8s config file, example: ~/.kube/config',
+    #                                  required=True)
+    # restart_sidecar_cmd.add_argument('-ns', '--namespace', type=str, help='k8s namespace', default='default')
+    # restart_sidecar_cmd.add_argument('-n', '--name', type=str, help='k8s pod name list, example: pod-1,pod-2')
+    # restart_sidecar_cmd.add_argument('-c', '--container', type=str, help='container name, example: test1-container',
+    #                                  required=True)
+
+    args = parser.parse_args()
+    if not args.subcmd:
+        parser.print_help()
+    else:
+        args.func(args)
