@@ -71,11 +71,11 @@ class PodModify(BaseModify):
         if len(pod.spec.containers) <= 1:
             raise Exception("forbidden to modify pod image, only 1 container")
         container_found = False
-        for index in range(pod.spec.template.spec.containers):
+        for index in range(len(pod.spec.containers)):
             # don't modify main container's image
             if index == 0:
                 continue
-            container = pod.spec.template.containers[index]
+            container = pod.spec.containers[index]
             if container.name == container_name:
                 container.image = image
                 container_found = True
