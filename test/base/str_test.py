@@ -33,3 +33,9 @@ class TestStrExample(unittest.TestCase):
         if str1:
             print(len(str1))
         print(len(str2))
+
+    def testTrimFun(self):
+        str1 = " hello world "
+        print(str.strip(str1))
+        str2 = ""
+        print(str.strip(str2))

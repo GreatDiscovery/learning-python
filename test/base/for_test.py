@@ -7,3 +7,9 @@ class TestForExample(unittest.TestCase):
         for index in range(len(arr)):
             print(arr[index])
 
+    def test_join_comma(self):
+        # 创建一个列表
+        list_ = ['apple', 'banana', 'cherry']
+        # 使用join()方法将列表中的元素用逗号拼接起来
+        string = ','.join(list_)
+        print(string)  # 输出：apple, banana, cherry

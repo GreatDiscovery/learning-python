@@ -1,5 +1,6 @@
 # encoding: utf-8
 import argparse
+import struct
 import traceback
 from enum import Enum
 from kubernetes import client, config
@@ -22,7 +23,29 @@ def update_image(opts):
 
 
 def list_resource(opts):
-    print("null")
+    k8s_config = str.strip(opts.kubeconfig)
+    k8s_context = str.strip(opts.context)
+    k8s_resource = str.strip(opts.resource)
+    namespace = str.strip(opts.namespace)
+    label = str.strip(opts.label)
+    zone = str.strip(opts.zone)
+
+    if label == "":
+        raise Exception(f"label {label} is empty")
+    if "=" not in label:
+        raise Exception(f"label {label} is invalid")
+
+    k8s_client = get_k8s_client(zone, k8s_config, k8s_context, k8s_resource)
+    ret = None
+    if Resource.Pod.value == k8s_resource:
+        ret = k8s_client.list_namespaced_pod(namespace=namespace, label_selector=label, resource_version=0, limit=1000)
+    elif Resource.StatefulSet.value == k8s_resource:
+        ret = k8s_client.list_namespaced_stateful_set(namespace=namespace, label_selector=label, resource_version=0,
+                                                      limit=500)
+    arr = []
+    for item in ret.items:
+        arr.append(item.metadata.name)
+    print(f"list {k8s_resource} label: {label} result={','.join(arr)}")
 
 
 class Zone(Enum):
@@ -36,6 +59,31 @@ class Resource(Enum):
     StatefulSet = "sts"
 
 
+def get_k8s_client(zone: str, config_file: str, context: str, resource: str):
+    if Resource.StatefulSet.value == resource:
+        return get_sts_client(zone, config_file, context)
+    elif Resource.Pod.value == resource:
+        return get_pod_client(zone, config_file, context)
+
+
+def get_sts_client(zone: str, config_file: str, context: str):
+    if context:
+        config.load_kube_config(config_file=config_file, context=context)
+    else:
+        config.load_kube_config(config_file=config_file)
+    v1 = client.AppsV1Api()
+    return v1
+
+
+def get_pod_client(zone: str, config_file: str, context: str):
+    if context:
+        config.load_kube_config(config_file=config_file, context=context)
+    else:
+        config.load_kube_config(config_file=config_file)
+    v1 = client.CoreV1Api()
+    return v1
+
+
 class BaseModify:
 
     def name(self):
@@ -44,36 +92,23 @@ class BaseModify:
     def update_image(self, opts: argparse.Namespace):
         raise Exception("non-implementation")
 
-    def get_pod_client(self, zone: str, config_file: str, context: str):
-        if context:
-            config.load_kube_config(config_file=config_file, context=context)
-        else:
-            config.load_kube_config(config_file=config_file)
-        v1 = client.CoreV1Api()
-        return v1
-
-    def get_sts_client(self, zone: str, config_file: str, context: str):
-        if context:
-            config.load_kube_config(config_file=config_file, context=context)
-        else:
-            config.load_kube_config(config_file=config_file)
-        v1 = client.AppsV1Api()
-        return v1
-
 
 class PodModify(BaseModify):
     def name(self):
         return "Pod"
 
     def update_image(self, opts: argparse.Namespace):
-        pod_name = opts.name
-        container_name = opts.container
-        image = opts.image
+        pod_name = str.strip(opts.name)
+        container_name = str.strip(opts.container)
+        image = str.strip(opts.image)
+        namespace = str.strip(opts.namespace)
 
-        k8s_client = super().get_pod_client(opts.zone, opts.kubeconfig, opts.context)
+        k8s_client = get_pod_client(str.strip(opts.zone), str.strip(opts.kubeconfig), str.strip(opts.context))
         if pod_name:
             for name in str.split(pod_name, ","):
-                pod = k8s_client.read_namespaced_pod(name=name, namespace=opts.namespace)
+                if name == "":
+                    continue
+                pod = k8s_client.read_namespaced_pod(name=str.strip(name), namespace=namespace)
                 self.update_one_pod_image(k8s_client, pod, container_name, image)
 
     def update_one_pod_image(self, k8s_client, pod, container_name, image):
@@ -102,14 +137,17 @@ class StsModify(BaseModify):
         return "StatefulSet"
 
     def update_image(self, opts: argparse.Namespace):
-        sts_name = opts.name
-        image = opts.image
-        container_name = opts.container
+        sts_name = str.strip(opts.name)
+        image = str.strip(opts.image)
+        container_name = str.strip(opts.container)
+        namespace = str.strip(opts.namespace)
 
-        k8s_client = super().get_sts_client(opts.zone, opts.kubeconfig, opts.context)
+        k8s_client = get_sts_client(str.strip(opts.zone), str.strip(opts.kubeconfig), str.strip(opts.context))
         if sts_name:
             for name in str.split(sts_name, ","):
-                sts = k8s_client.read_namespaced_stateful_set(name=name, namespace=opts.namespace)
+                if name == "":
+                    continue
+                sts = k8s_client.read_namespaced_stateful_set(name=str.strip(name), namespace=namespace)
                 self.update_one_sts_image(k8s_client, sts, container_name, image)
 
     def update_one_sts_image(self, k8s_client, sts, container_name, new_image):
@@ -130,6 +168,8 @@ class StsModify(BaseModify):
 def check_image_format(image: str):
     if image == "":
         raise Exception("image is empty")
+    if ":" not in image:
+        raise Exception(f"image {image} is invalid")
 
 
 if __name__ == '__main__':
@@ -142,7 +182,7 @@ if __name__ == '__main__':
                                   required=True)
     update_image_cmd.add_argument('-k', '--kubeconfig', type=str, help='k8s config file, example: ~/.kube/config',
                                   required=True)
-    update_image_cmd.add_argument('-ctx', '--context', type=str, help='k8s context, example: k8s-cls')
+    update_image_cmd.add_argument('-ctx', '--context', type=str, help='k8s context, example: k8s-cls', default='')
     update_image_cmd.add_argument('-ns', '--namespace', type=str, help='k8s namespace', default='default')
     update_image_cmd.add_argument('-r', '--resource', type=str, choices=[resource.value for resource in Resource],
                                   help='k8s resource, example: pod',
@@ -160,21 +200,13 @@ if __name__ == '__main__':
                                    required=True)
     list_resource_cmd.add_argument('-k', '--kubeconfig', type=str, help='k8s config file, example: ~/.kube/config',
                                    required=True)
+    list_resource_cmd.add_argument('-ctx', '--context', type=str, help='k8s context, example: k8s-cls', default='')
     list_resource_cmd.add_argument('-ns', '--namespace', type=str, help='k8s namespace', default='default')
     list_resource_cmd.add_argument('-r', '--resource', type=str, choices=[resource.value for resource in Resource],
                                    help='k8s resource, example: pod',
                                    required=True)
     list_resource_cmd.add_argument('-l', '--label', type=str, help='k8s filter label, example: env=test')
     list_resource_cmd.set_defaults(func=list_resource)
-
-    # restart_sidecar_cmd = subparser.add_parser("restart-sidecar",
-    #                                            help="restart sidecar container, forbidden to restart main container in pod.")
-    # restart_sidecar_cmd.add_argument('-k', '--kubeconfig', type=str, help='k8s config file, example: ~/.kube/config',
-    #                                  required=True)
-    # restart_sidecar_cmd.add_argument('-ns', '--namespace', type=str, help='k8s namespace', default='default')
-    # restart_sidecar_cmd.add_argument('-n', '--name', type=str, help='k8s pod name list, example: pod-1,pod-2')
-    # restart_sidecar_cmd.add_argument('-c', '--container', type=str, help='container name, example: test1-container',
-    #                                  required=True)
 
     args = parser.parse_args()
     if not args.subcmd:
