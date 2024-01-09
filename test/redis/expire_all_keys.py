@@ -51,14 +51,16 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='expire all keys')
     parser.add_argument('-host', '--hostname', type=str, help='redis hostname', default='127.0.0.1')
     parser.add_argument('-p', '--port', type=str, help='redis port', default='6379')
-    parser.add_argument('-e', '--expire_time', type=int, help='redis expire time in seconds', required=True)
     parser.add_argument('-c', '--cluster_mode', type=bool, help='redis cluster mode or not', default=False)
-    parser.add_argument('-b', '--batch_size', type=int, help='scan count', default=10000)
     parser.add_argument('-m', '--match', type=str, help='scan match, example: prefix*', default='*')
+    parser.add_argument('-b', '--batch_size', type=int, help='scan count', default=10000)
+    parser.add_argument('-e', '--expire_time', type=int, help='redis expire time in seconds', required=True)
     parser.add_argument('-g', '--greater_than', type=int, help='only modify key that has expire time and the expire '
                                                                'time must greater than this parameter in seconds, '
                                                                'example: 60',
                         required=True, default=60)
+    parser.add_argument('-pz', '--pipeline_max_size', type=int, help='redis pipeline size', default=1000)
+
     args = parser.parse_args()
     expire_time = args.expire_time
     if expire_time < 0:
@@ -70,14 +72,32 @@ if __name__ == '__main__':
     else:
         print(f"modify keys whose expire time greater than {min_time}")
 
+    count = args.batch_size
+    if count > 100000:
+        print("count is too large")
+        exit(1)
+
+    pipeline_max_size = args.pipeline_max_size
+    if pipeline_max_size > 10000:
+        print("pipeline_max_size is too large")
+        exit(1)
+
     client = get_redis_client(args.hostname, args.port)
     # Calculate SHA1 hash of the Lua script
     script_sha1 = client.script_load(lua_script)
-
     scatter = need_to_scatter(expire_time)
-    for key in client.scan_iter(match=args.match, count=args.batch_size):
-        # todo pipeline
+
+    pipeline = client.pipeline()
+    pipeline_batch_size = 0
+    for key in client.scan_iter(match=args.match, count=count):
         keys_and_args = [key, expire_time, min_time]
         if scatter:
             keys_and_args[1] += get_random_num(expire_time)
-        result = client.evalsha(script_sha1, 1, *keys_and_args)
+        pipeline.evalsha(script_sha1, 1, *keys_and_args)
+        pipeline_batch_size += 1
+        if pipeline_batch_size > pipeline_max_size:
+            pipeline.execute()
+            pipeline_batch_size = 0
+            pipeline = client.pipeline()
+    if pipeline_batch_size > 0:
+        pipeline.execute()
