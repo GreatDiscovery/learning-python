@@ -89,6 +89,7 @@ if __name__ == '__main__':
 
     pipeline = client.pipeline()
     pipeline_batch_size = 0
+    # todo record cursor into file
     for key in client.scan_iter(match=args.match, count=count):
         keys_and_args = [key, expire_time, min_time]
         if scatter:
