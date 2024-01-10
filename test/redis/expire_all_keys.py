@@ -94,6 +94,7 @@ if __name__ == '__main__':
         keys_and_args = [key, expire_time, min_time]
         if scatter:
             keys_and_args[1] += get_random_num(expire_time)
+        # fixme pipeline只能发送在同一个slot里的key
         pipeline.evalsha(script_sha1, 1, *keys_and_args)
         pipeline_batch_size += 1
         if pipeline_batch_size > pipeline_max_size:
