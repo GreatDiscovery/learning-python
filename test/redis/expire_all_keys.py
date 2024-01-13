@@ -1,7 +1,9 @@
 # encoding: utf-8
 import argparse
 import random
+import re
 
+import crc16
 import redis
 
 # redis集群写满后，调整key的时间，使其快速过期，快速减少内存
@@ -47,6 +49,27 @@ def need_to_scatter(expire: int):
     return expire > 100
 
 
+def redis_crc16(raw_key):
+    # Redis的CRC16算法是基于CCITT标准的CRC16算法的变种
+    # 该变种使用大端字节序 (big-endian)
+    crc = crc16.crc16xmodem(raw_key.encode('utf-8')) & 0x3FFF
+    return crc
+
+
+def get_redis_slot(raw_key):
+    # has hash tag
+    if "{" in raw_key and "}" in raw_key:
+        raw_key = extract_braces_content(raw_key)
+    slot = redis_crc16(raw_key)
+    return slot
+
+
+def extract_braces_content(input_string):
+    # 使用正则表达式查找大括号内的内容
+    matches = re.findall(r'\{(.*?)\}', input_string)
+    return matches
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='expire all keys')
     parser.add_argument('-host', '--hostname', type=str, help='redis hostname', default='127.0.0.1')
@@ -87,19 +110,29 @@ if __name__ == '__main__':
     script_sha1 = client.script_load(lua_script)
     scatter = need_to_scatter(expire_time)
 
-    pipeline = client.pipeline()
-    pipeline_batch_size = 0
+    # 16384个slot
+    slot_pipeline = {}
+    slot_pipeline_count = {}
+
+    for i in range(0, 16384):
+        slot_pipeline[i] = client.pipeline()
+        slot_pipeline_count[i] = 0
+
     # todo record cursor into file
     for key in client.scan_iter(match=args.match, count=count):
+        slot = get_redis_slot(key)
+        pipeline = slot_pipeline[slot]
         keys_and_args = [key, expire_time, min_time]
         if scatter:
             keys_and_args[1] += get_random_num(expire_time)
-        # fixme pipeline只能发送在同一个slot里的key
         pipeline.evalsha(script_sha1, 1, *keys_and_args)
-        pipeline_batch_size += 1
-        if pipeline_batch_size > pipeline_max_size:
+        slot_pipeline_count[slot] += 1
+        if slot_pipeline_count[slot] > pipeline_max_size:
             pipeline.execute()
-            pipeline_batch_size = 0
-            pipeline = client.pipeline()
-    if pipeline_batch_size > 0:
-        pipeline.execute()
+            slot_pipeline_count[slot] = 0
+            slot_pipeline[slot] = client.pipeline()
+
+    # work for the rest
+    for slot, count in slot_pipeline_count:
+        if count > 0:
+            slot_pipeline[slot].execute()
