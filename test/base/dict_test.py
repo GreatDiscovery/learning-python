@@ -16,3 +16,8 @@ class TestDictExample(unittest.TestCase):
         arr = [5, 3, 4, 1, 2]
         for i in arr:
             print(i)
+
+    def test_range(self):
+        d1 = {1: 1, 2: 2, 3: 3, 4: 4}
+        for k in d1:
+            print(f'k={k}')

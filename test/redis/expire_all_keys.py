@@ -133,6 +133,6 @@ if __name__ == '__main__':
             slot_pipeline[slot] = client.pipeline()
 
     # work for the rest
-    for slot, count in slot_pipeline_count:
-        if count > 0:
+    for slot in slot_pipeline_count:
+        if slot_pipeline_count[slot] > 0:
             slot_pipeline[slot].execute()
