@@ -63,7 +63,6 @@ def get_redis_slot(raw_key):
         if len(raw_key_list) > 0:
             raw_key = raw_key_list[0]
     slot = redis_crc16(raw_key)
-    print(f'key={raw_key}, slot={slot}')
     return slot
 
 
@@ -125,7 +124,6 @@ if __name__ == '__main__':
 
     # todo record cursor into file
     for key in client.scan_iter(match=args.match, count=count):
-        print(f'key={key}, type={type(key)}')
         slot = get_redis_slot(key.decode('utf-8'))
         pipeline = slot_pipeline[slot]
         keys_and_args = [key, expire_time, min_time]
@@ -144,4 +142,5 @@ if __name__ == '__main__':
     # work for the rest
     for slot in slot_pipeline_count:
         if slot_pipeline_count[slot] > 0:
+            print(f'last execute, slot={slot}, key={slot_pipeline_key[slot]}')
             slot_pipeline[slot].execute()
