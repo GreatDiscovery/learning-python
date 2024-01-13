@@ -59,8 +59,11 @@ def redis_crc16(raw_key):
 def get_redis_slot(raw_key):
     # has hash tag
     if "{" in raw_key and "}" in raw_key:
-        raw_key = extract_braces_content(raw_key)
+        raw_key_list = extract_braces_content(raw_key)
+        if len(raw_key_list) > 0:
+            raw_key = raw_key_list[0]
     slot = redis_crc16(raw_key)
+    print(f'key={raw_key}, slot={slot}')
     return slot
 
 
@@ -113,24 +116,30 @@ if __name__ == '__main__':
     # 16384个slot
     slot_pipeline = {}
     slot_pipeline_count = {}
+    slot_pipeline_key = {}
 
     for i in range(0, 16384):
         slot_pipeline[i] = client.pipeline()
         slot_pipeline_count[i] = 0
+        slot_pipeline_key[i] = []
 
     # todo record cursor into file
     for key in client.scan_iter(match=args.match, count=count):
-        slot = get_redis_slot(key)
+        print(f'key={key}, type={type(key)}')
+        slot = get_redis_slot(key.decode('utf-8'))
         pipeline = slot_pipeline[slot]
         keys_and_args = [key, expire_time, min_time]
         if scatter:
             keys_and_args[1] += get_random_num(expire_time)
         pipeline.evalsha(script_sha1, 1, *keys_and_args)
         slot_pipeline_count[slot] += 1
+        slot_pipeline_key[slot].append(key)
         if slot_pipeline_count[slot] > pipeline_max_size:
+            print(f'slot={slot}, key={slot_pipeline_key[slot]}')
             pipeline.execute()
             slot_pipeline_count[slot] = 0
             slot_pipeline[slot] = client.pipeline()
+            slot_pipeline_key[slot].clear()
 
     # work for the rest
     for slot in slot_pipeline_count:
