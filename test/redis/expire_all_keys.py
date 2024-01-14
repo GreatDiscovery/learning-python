@@ -84,7 +84,8 @@ if __name__ == '__main__':
                                                                'time must greater than this parameter in seconds, '
                                                                'example: 60',
                         required=True, default=60)
-    parser.add_argument('-pz', '--pipeline_max_size', type=int, help='redis pipeline size', default=1000)
+    parser.add_argument('-pz', '--pipeline_max_size', type=int, help='redis pipeline size', default=100)
+    parser.add_argument('-up', '--use_pipeline', type=bool, help='use pipeline or not', default=False)
 
     args = parser.parse_args()
     expire_time = args.expire_time
@@ -122,26 +123,37 @@ if __name__ == '__main__':
         slot_pipeline_count[i] = 0
         slot_pipeline_key[i] = []
 
-    # todo record cursor into file
-    for key in client.scan_iter(match=args.match, count=count):
-        slot = get_redis_slot(key.decode('utf-8'))
-        pipeline = slot_pipeline[slot]
-        keys_and_args = [key, expire_time, min_time]
-        if scatter:
-            keys_and_args[1] += get_random_num(expire_time)
-        pipeline.evalsha(script_sha1, 1, *keys_and_args)
-        slot_pipeline_count[slot] += 1
-        slot_pipeline_key[slot].append(key)
-        if slot_pipeline_count[slot] > pipeline_max_size:
-            print(f'slot={slot}, key={slot_pipeline_key[slot]}')
-            # fixme 导致节点崩溃，需要找下原因
-            # pipeline.execute()
-            slot_pipeline_count[slot] = 0
-            slot_pipeline[slot] = client.pipeline()
-            slot_pipeline_key[slot].clear()
+    use_pipeline = args.use_pipeline
+    if use_pipeline:
+        # todo record cursor into file
+        for key in client.scan_iter(match=args.match, count=count):
+            slot = get_redis_slot(key.decode('utf-8'))
+            pipeline = slot_pipeline[slot]
+            keys_and_args = [key, expire_time, min_time]
+            if scatter:
+                keys_and_args[1] += get_random_num(expire_time)
+            pipeline.evalsha(script_sha1, 1, *keys_and_args)
+            slot_pipeline_count[slot] += 1
+            slot_pipeline_key[slot].append(key)
+            if slot_pipeline_count[slot] > pipeline_max_size:
+                # print(f'slot={slot}, key={slot_pipeline_key[slot]}')
+                # fixme 导致节点崩溃，需要找下原因
+                pipeline.execute()
+                pipeline.close()
+                slot_pipeline_count[slot] = 0
+                slot_pipeline[slot] = client.pipeline()
+                slot_pipeline_key[slot].clear()
 
-    # work for the rest
-    for slot in slot_pipeline_count:
-        if slot_pipeline_count[slot] > 0:
-            print(f'last execute, slot={slot}, key={slot_pipeline_key[slot]}')
-            # slot_pipeline[slot].execute()
+        # work for the rest
+        for slot in slot_pipeline_count:
+            if slot_pipeline_count[slot] > 0:
+                print(f'last execute, slot={slot}, key={slot_pipeline_key[slot]}')
+                slot_pipeline[slot].execute()
+                slot_pipeline[slot].close()
+    else:
+        for key in client.scan_iter(match=args.match, count=count):
+            keys_and_args = [key, expire_time, min_time]
+            # print(f'key={key}')
+            if scatter:
+                keys_and_args[1] += get_random_num(expire_time)
+            client.evalsha(script_sha1, 1, *keys_and_args)
