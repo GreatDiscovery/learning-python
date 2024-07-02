@@ -1,6 +1,7 @@
 # encoding: utf-8
 import argparse
 import struct
+import time
 import traceback
 from enum import Enum
 from kubernetes import client, config
@@ -108,6 +109,7 @@ class PodModify(BaseModify):
             for name in str.split(pod_name, ","):
                 if name == "":
                     continue
+                time.sleep(1)
                 pod = k8s_client.read_namespaced_pod(name=str.strip(name), namespace=namespace)
                 self.update_one_pod_image(k8s_client, pod, container_name, image)
 

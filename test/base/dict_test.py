@@ -21,3 +21,16 @@ class TestDictExample(unittest.TestCase):
         d1 = {1: 1, 2: 2, 3: 3, 4: 4}
         for k in d1:
             print(f'k={k}')
+
+    def test_dict_null(self):
+        tinydict = {'Name': 'Zara', 'Age': 7, 'Class': 'First'}
+        # 访问一个不存在的key会报keyError问题，优先使用get方法
+        # v2 = tinydict['v2']
+        v2 = ''
+        if tinydict.get('v2') is None:
+            tinydict['v2'] = "ok"
+            v2 = tinydict['v2']
+        if v2 is None:
+            print('v2 is None')
+        else:
+            print(v2)
