@@ -70,7 +70,9 @@ if __name__ == "__main__":
     max_threads = 5  # 最大线程数
     scan_count = 1000
 
-
+    if prefix == "" or prefix is None:
+        print("prefix cannot be empty")
+        exit(1)
     # 创建 RedisKeyDeleter 实例并删除前缀键
     deleter = RedisKeyDeleter(redis_ips, prefix, max_threads, scan_count, dry_run)
     deleter.delete_keys()
