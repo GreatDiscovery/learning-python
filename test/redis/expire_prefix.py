@@ -2,9 +2,13 @@ import redis
 import concurrent.futures
 from typing import List
 
+"""
+    用于批量删除前缀key
+"""
 
 class RedisKeyDeleter:
-    def __init__(self, redis_ips: List[str], prefix: str, max_threads: int = 10, scan_count: int = 1000, dry_run: bool = True):
+    def __init__(self, redis_ips: List[str], prefix: str, max_threads: int = 10, scan_count: int = 1000,
+                 pipeline_count: int = 1000, dry_run: bool = True):
         """
         初始化 RedisKeyDeleter
 
@@ -12,12 +16,15 @@ class RedisKeyDeleter:
         :param prefix: 需要删除的键的前缀
         :param max_threads: 最大线程数，默认值为 10
         :param dry_run: 如果空跑的话，只打印不删除
+        :param scan_count: scan扫描的batch
+        :param pipeline_count: 发送删除命令的
         """
         self.dry_run = dry_run
         self.redis_ips = redis_ips
         self.prefix = prefix
         self.max_threads = max_threads
         self.scan_count = scan_count
+        self.pipeline_count = pipeline_count
 
     def _delete_keys_with_prefix(self, redis_client: redis.StrictRedis):
         """
@@ -30,13 +37,15 @@ class RedisKeyDeleter:
             cursor, keys = redis_client.scan(cursor, match=self.prefix + '*', count=self.scan_count)
             if keys:
                 print(f"Deleted {len(keys)} keys from {redis_client.connection_pool.connection_kwargs['host']}")
-                for key in keys:
-                    if self.dry_run:
-                        print(f"dry run Deleted {key}")
-                    else:
-                        pipeline = redis_client.pipeline()
-                        pipeline.delete(key)
-                        pipeline.execute()
+                for i in range(0, len(keys), self.pipeline_count):
+                    for key in keys[i:i + self.pipeline_count]:
+                        if self.dry_run:
+                            print(f"dry run Deleted {key}")
+                        else:
+
+                            pipeline = redis_client.pipeline()
+                            pipeline.delete(key)
+                            pipeline.execute()
             if cursor == 0:
                 break
 
@@ -63,16 +72,18 @@ class RedisKeyDeleter:
 
 # 示例用法
 if __name__ == "__main__":
+    # todo argu argparse
     dry_run = True
     # Redis 节点 IP 地址和前缀
     redis_ips = ['10.74.110.58', '10.74.40.101', '10.74.204.2']
     prefix = "key:"
     max_threads = 5  # 最大线程数
     scan_count = 1000
+    pipeline_count = 1000
 
     if prefix == "" or prefix is None:
         print("prefix cannot be empty")
         exit(1)
     # 创建 RedisKeyDeleter 实例并删除前缀键
-    deleter = RedisKeyDeleter(redis_ips, prefix, max_threads, scan_count, dry_run)
+    deleter = RedisKeyDeleter(redis_ips, prefix, max_threads, scan_count, pipeline_count, dry_run)
     deleter.delete_keys()
