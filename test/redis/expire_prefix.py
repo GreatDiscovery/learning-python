@@ -1,14 +1,17 @@
 import redis
 import concurrent.futures
 from typing import List
+import argparse
+import crc16
 
 """
     用于批量删除前缀key
 """
 
+
 class RedisKeyDeleter:
     def __init__(self, redis_ips: List[str], prefix: str, max_threads: int = 10, scan_count: int = 1000,
-                 pipeline_count: int = 1000, dry_run: bool = True):
+                 pipeline_count: int = 1000, dry_run: bool = True, slots: int = 4095):
         """
         初始化 RedisKeyDeleter
 
@@ -25,6 +28,7 @@ class RedisKeyDeleter:
         self.max_threads = max_threads
         self.scan_count = scan_count
         self.pipeline_count = pipeline_count
+        self.slots = slots
 
     def _delete_keys_with_prefix(self, redis_client: redis.StrictRedis):
         """
@@ -32,22 +36,36 @@ class RedisKeyDeleter:
 
         :param redis_client: Redis 客户端实例
         """
+        slot_key_map = {}
         cursor = 0
         while True:
             cursor, keys = redis_client.scan(cursor, match=self.prefix + '*', count=self.scan_count)
             if keys:
-                print(f"Deleted {len(keys)} keys from {redis_client.connection_pool.connection_kwargs['host']}")
-                for i in range(0, len(keys), self.pipeline_count):
-                    for key in keys[i:i + self.pipeline_count]:
-                        if self.dry_run:
-                            print(f"dry run Deleted {key}")
-                        else:
-
-                            pipeline = redis_client.pipeline()
-                            pipeline.delete(key)
-                            pipeline.execute()
+                for key in keys:
+                    if self.dry_run is True:
+                        print(f"dry run deleted keys: {keys}")
+                    else:
+                        print(f"Deleted {len(keys)} keys from {redis_client.connection_pool.connection_kwargs['host']}")
+                        slot = self.redis_crc16(key)
+                        if slot not in slot_key_map:
+                            slot_key_map[slot] = []
+                        slot_key_map[slot].append(key)
+                        if slot_key_map[slot] and len(slot_key_map[slot]) >= self.pipeline_count:
+                            for k in slot_key_map[slot]:
+                                print(f"Deleted slot {slot}, len(keys)={len(slot_key_map[slot])}")
+                                pipeline = redis_client.pipeline()
+                                pipeline.delete(k)
+                                pipeline.execute()
+                            slot_key_map[slot] = []
             if cursor == 0:
                 break
+        # 补发剩余部分
+        for slot in slot_key_map:
+            for key in slot_key_map[slot]:
+                pipeline = redis_client.pipeline()
+                pipeline.delete(key)
+                pipeline.execute()
+        slot_key_map.clear()
 
     def _delete_keys_from_redis_node(self, ip: str):
         """
@@ -57,6 +75,7 @@ class RedisKeyDeleter:
         """
         r = redis.StrictRedis(host=ip, port=6379, db=0)
         self._delete_keys_with_prefix(r)
+        r.close()
 
     def delete_keys(self):
         """
@@ -69,21 +88,53 @@ class RedisKeyDeleter:
 
         print("Finished deleting keys from all Redis nodes.")
 
+    def redis_crc16(self, raw_key):
+        # Redis的CRC16算法是基于CCITT标准的CRC16算法的变种
+        # 该变种使用大端字节序 (big-endian)
+        crc = crc16.crc16xmodem(raw_key) & self.slots
+        return crc
+
+    def slot_key_map(self, keys):
+        slot_dict = {}
+        for key in keys:
+            slot = self.redis_crc16(key)
+            if slot not in slot_dict:
+                slot_dict[slot] = []
+            slot_dict[slot].append(key)
+        return slot_dict
+
 
 # 示例用法
+# python3 ./expire_prefix.py --dry-run True --redis-ips 10.74.110.58,10.74.40.101,10.74.204.2 --prefix "key:" --max-threads 10 --scan-count 1000 --pipeline-count 1000 --slots 4095 > audit.log
+
 if __name__ == "__main__":
-    # todo argu argparse
-    dry_run = True
-    # Redis 节点 IP 地址和前缀
-    redis_ips = ['10.74.110.58', '10.74.40.101', '10.74.204.2']
-    prefix = "key:"
-    max_threads = 5  # 最大线程数
-    scan_count = 1000
-    pipeline_count = 1000
+    # 使用 argparse 获取命令行参数
+    parser = argparse.ArgumentParser(description="Delete Redis keys with a specified prefix.")
+    parser.add_argument('--dry-run', type=str, default=True, required=True, help='prints keys but do not delete keys')
+    parser.add_argument('--redis-ips', type=str, required=True, help='Comma-separated list of Redis IPs')
+    parser.add_argument('--prefix', type=str, required=True, help='Prefix of the Redis keys to delete')
+    parser.add_argument('--max-threads', type=int, default=10, help='Maximum number of threads to use (default is 10)')
+    parser.add_argument('--scan-count', type=int, default=1000, help='Maximum number of scan to use (default is 1000)')
+    parser.add_argument('--pipeline-count', type=int, default=1000,
+                        help='Maximum number of scan to use (default is 1000)')
+    parser.add_argument('--slots', type=int, default=4095, help='redis cluster slots')
+
+    args = parser.parse_args()
+
+    # 将 IP 字符串转换为列表
+    redis_ips = args.redis_ips.split(',')
+    dry_run = args.dry_run
+    prefix = args.prefix
+    max_threads = args.max_threads  # 最大线程数
+    scan_count = args.scan_count
+    pipeline_count = args.pipeline_count
+    slots = args.slots
 
     if prefix == "" or prefix is None:
         print("prefix cannot be empty")
         exit(1)
     # 创建 RedisKeyDeleter 实例并删除前缀键
-    deleter = RedisKeyDeleter(redis_ips, prefix, max_threads, scan_count, pipeline_count, dry_run)
+    print(
+        f'redis ips: {redis_ips}, prefix: {prefix}, max_threads: {max_threads}, scan_count: {scan_count}, pipeline_count: {pipeline_count}, dry_run: {dry_run}, slots: {slots}')
+    deleter = RedisKeyDeleter(redis_ips, prefix, max_threads, scan_count, pipeline_count, dry_run, slots)
     deleter.delete_keys()

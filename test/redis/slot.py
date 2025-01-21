@@ -6,7 +6,7 @@ import crc16
 def redis_crc16(raw_key):
     # Redis的CRC16算法是基于CCITT标准的CRC16算法的变种
     # 该变种使用大端字节序 (big-endian)
-    crc = crc16.crc16xmodem(raw_key.encode('utf-8')) & 0x3FFF
+    crc = crc16.crc16xmodem(raw_key.encode('utf-8')) & 4095
     return crc
 
 
@@ -40,10 +40,10 @@ def get_redis_slot(raw_key):
 
 
 if __name__ == '__main__':
-    key1 = "4test5555_8_2028_801"
+    key1 = "key:000000616373"
     slot = get_redis_slot(key1)
     print(f'slot={slot}')
 
-    key2 = b"4test5555_8_2028_801"
+    key2 = b"key:000000616373"
     slot = get_redis_slot(key2.decode('utf-8'))
     print(f'slot={slot}')
