@@ -106,12 +106,14 @@ class RedisKeyDeleter:
 
 
 # 示例用法
+# --dry-run False才会真正执行删除数据，否则只会打印待删除的数据
 # python3 ./expire_prefix.py --dry-run True --redis-ips 10.74.110.58,10.74.40.101,10.74.204.2 --prefix "key:" --max-threads 10 --scan-count 1000 --pipeline-count 1000 --slots 4095 > audit.log
+# python3 ./expire_prefix.py --dry-run False --redis-ips 10.74.110.58,10.74.40.101,10.74.204.2 --prefix "key:" --max-threads 10 --scan-count 1000 --pipeline-count 1000 --slots 4095 > audit.log
 
 if __name__ == "__main__":
     # 使用 argparse 获取命令行参数
     parser = argparse.ArgumentParser(description="Delete Redis keys with a specified prefix.")
-    parser.add_argument('--dry-run', type=bool, default=True, required=True, help='prints keys but do not delete keys')
+    parser.add_argument('--dry-run', type=str, default=True, required=True, help='prints keys but do not delete keys')
     parser.add_argument('--redis-ips', type=str, required=True, help='Comma-separated list of Redis IPs')
     parser.add_argument('--prefix', type=str, required=True, help='Prefix of the Redis keys to delete')
     parser.add_argument('--max-threads', type=int, default=10, help='Maximum number of threads to use (default is 10)')
@@ -124,7 +126,9 @@ if __name__ == "__main__":
 
     # 将 IP 字符串转换为列表
     redis_ips = args.redis_ips.split(',')
-    dry_run = args.dry_run
+    dry_run = True
+    if args.dry_run == 'False' or args.dry_run == 'false':
+        dry_run = False
     prefix = args.prefix
     max_threads = args.max_threads  # 最大线程数
     scan_count = args.scan_count
