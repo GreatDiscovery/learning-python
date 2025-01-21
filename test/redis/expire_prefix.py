@@ -43,7 +43,7 @@ class RedisKeyDeleter:
             if keys:
                 for key in keys:
                     if self.dry_run is True:
-                        print(f"dry run deleted keys: {keys}")
+                        print(f"dry run deleted key: {key}")
                     else:
                         print(f"Deleted {len(keys)} keys from {redis_client.connection_pool.connection_kwargs['host']}")
                         slot = self.redis_crc16(key)
@@ -60,12 +60,13 @@ class RedisKeyDeleter:
             if cursor == 0:
                 break
         # 补发剩余部分
-        for slot in slot_key_map:
-            for key in slot_key_map[slot]:
-                pipeline = redis_client.pipeline()
-                pipeline.delete(key)
-                pipeline.execute()
-        slot_key_map.clear()
+        if self.dry_run is False:
+            for slot in slot_key_map:
+                for key in slot_key_map[slot]:
+                    pipeline = redis_client.pipeline()
+                    pipeline.delete(key)
+                    pipeline.execute()
+            slot_key_map.clear()
 
     def _delete_keys_from_redis_node(self, ip: str):
         """
@@ -110,7 +111,7 @@ class RedisKeyDeleter:
 if __name__ == "__main__":
     # 使用 argparse 获取命令行参数
     parser = argparse.ArgumentParser(description="Delete Redis keys with a specified prefix.")
-    parser.add_argument('--dry-run', type=str, default=True, required=True, help='prints keys but do not delete keys')
+    parser.add_argument('--dry-run', type=bool, default=True, required=True, help='prints keys but do not delete keys')
     parser.add_argument('--redis-ips', type=str, required=True, help='Comma-separated list of Redis IPs')
     parser.add_argument('--prefix', type=str, required=True, help='Prefix of the Redis keys to delete')
     parser.add_argument('--max-threads', type=int, default=10, help='Maximum number of threads to use (default is 10)')
