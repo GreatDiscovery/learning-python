@@ -8,6 +8,7 @@ import crc16
     用于批量删除前缀key
     示例用法，注意最好重定向到audit.log文件里，记录
     --dry-run False才会真正执行删除数据，否则只会打印待删除的数据
+    --redis-ips master ip，使用逗号分隔
     python3 ./expire_prefix.py   --redis-ips 10.74.110.58,10.74.40.101,10.74.204.2 --prefix "key:" --max-threads 3 --scan-count 1000 --pipeline-count 500 --dry-run True > audit.log
     python3 ./expire_prefix.py   --redis-ips 10.74.110.58,10.74.40.101,10.74.204.2 --prefix "key:" --max-threads 3 --scan-count 1000 --pipeline-count 500 --dry-run False > audit.log
 """
@@ -115,7 +116,7 @@ if __name__ == "__main__":
     # 使用 argparse 获取命令行参数
     parser = argparse.ArgumentParser(description="Delete Redis keys with a specified prefix.")
     parser.add_argument('--dry-run', type=str, default=True, required=True, help='prints keys but do not delete keys')
-    parser.add_argument('--redis-ips', type=str, required=True, help='Comma-separated list of Redis IPs')
+    parser.add_argument('--redis-ips', type=str, required=True, help='Comma-separated list of Redis IPs，主节点ip')
     parser.add_argument('--prefix', type=str, required=True, help='Prefix of the Redis keys to delete')
     parser.add_argument('--max-threads', type=int, default=10, help='Maximum number of threads to use (default is 10)')
     parser.add_argument('--scan-count', type=int, default=1000, help='Maximum number of scan to use (default is 1000)')
