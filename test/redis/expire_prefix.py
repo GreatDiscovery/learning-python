@@ -52,6 +52,7 @@ class RedisKeyDeleter:
                         slot_key_map[slot].append(key)
                         if slot_key_map[slot] and len(slot_key_map[slot]) >= self.pipeline_count:
                             for k in slot_key_map[slot]:
+                                print(f'key: {k}')
                                 pipeline = redis_client.pipeline()
                                 pipeline.delete(k)
                                 pipeline.execute()
