@@ -6,7 +6,13 @@ import crc16
 
 """
     用于批量删除前缀key
+    示例用法，注意最好重定向到audit.log文件里，记录
+    --dry-run False才会真正执行删除数据，否则只会打印待删除的数据
+    python3 ./expire_prefix.py   --redis-ips 10.74.110.58,10.74.40.101,10.74.204.2 --prefix "key:" --max-threads 3 --scan-count 1000 --pipeline-count 500 --dry-run True > audit.log
+    python3 ./expire_prefix.py   --redis-ips 10.74.110.58,10.74.40.101,10.74.204.2 --prefix "key:" --max-threads 3 --scan-count 1000 --pipeline-count 500 --dry-run False > audit.log
 """
+
+
 
 
 class RedisKeyDeleter:
@@ -45,7 +51,7 @@ class RedisKeyDeleter:
                     if self.dry_run is True:
                         print(f"dry run deleted key: {key}")
                     else:
-                        print(f"Deleted {len(keys)} keys from {redis_client.connection_pool.connection_kwargs['host']}")
+                        # print(f"Deleted {len(keys)} keys from {redis_client.connection_pool.connection_kwargs['host']}")
                         slot = self.redis_crc16(key)
                         if slot not in slot_key_map:
                             slot_key_map[slot] = []
@@ -63,6 +69,7 @@ class RedisKeyDeleter:
         if self.dry_run is False:
             for slot in slot_key_map:
                 for key in slot_key_map[slot]:
+                    print(f'key: {key}')
                     pipeline = redis_client.pipeline()
                     pipeline.delete(key)
                     pipeline.execute()
@@ -103,12 +110,6 @@ class RedisKeyDeleter:
                 slot_dict[slot] = []
             slot_dict[slot].append(key)
         return slot_dict
-
-
-# 示例用法
-# --dry-run False才会真正执行删除数据，否则只会打印待删除的数据
-# python3 ./expire_prefix.py --dry-run True --redis-ips 10.74.110.58,10.74.40.101,10.74.204.2 --prefix "key:" --max-threads 10 --scan-count 1000 --pipeline-count 1000 --slots 4095 > audit.log
-# python3 ./expire_prefix.py --dry-run False --redis-ips 10.74.110.58,10.74.40.101,10.74.204.2 --prefix "key:" --max-threads 10 --scan-count 1000 --pipeline-count 1000 --slots 4095 > audit.log
 
 if __name__ == "__main__":
     # 使用 argparse 获取命令行参数
