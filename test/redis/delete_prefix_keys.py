@@ -1,3 +1,6 @@
+import signal
+import threading
+
 import redis
 import concurrent.futures
 from typing import List
@@ -6,11 +9,11 @@ import crc16
 
 """
     用于批量删除前缀key
-    示例用法，注意最好重定向到audit.log文件里，记录
+    示例用法，注意最好重定向到audit.log文件里，记录删除的key。在实际使用中，先用--dry-run True空跑，把所有要删除的key打印出来检查是否符合预期，如果符合预期，再用--dry-run False执行真正的删除
     --dry-run False才会真正执行删除数据，否则只会打印待删除的数据
     --redis-ips master ip，使用逗号分隔
-    python3 ./expire_prefix.py   --redis-ips 10.74.110.58,10.74.40.101,10.74.204.2 --prefix "key:" --max-threads 3 --scan-count 1000 --pipeline-count 500 --dry-run True > audit.log
-    python3 ./expire_prefix.py   --redis-ips 10.74.110.58,10.74.40.101,10.74.204.2 --prefix "key:" --max-threads 3 --scan-count 1000 --pipeline-count 500 --dry-run False > audit.log
+    python3 ./delete_prefix_keys.py   --redis-ips 10.74.110.58,10.74.40.101,10.74.204.2 --prefix "key:" --max-threads 3 --scan-count 1000 --pipeline-count 500 --dry-run True > audit.log
+    python3 ./delete_prefix_keys.py   --redis-ips 10.74.110.58,10.74.40.101,10.74.204.2 --prefix "key:" --max-threads 3 --scan-count 1000 --pipeline-count 500 --dry-run False > audit.log
 """
 
 
@@ -36,6 +39,8 @@ class RedisKeyDeleter:
         self.scan_count = scan_count
         self.pipeline_count = pipeline_count
         self.slots = slots
+        self.executor = concurrent.futures.ThreadPoolExecutor(max_workers=self.max_threads)
+        self.stop_event = threading.Event()  # 创建一个全局的 Event，异步通知其他线程
 
     def _delete_keys_with_prefix(self, redis_client: redis.StrictRedis):
         """
@@ -45,7 +50,7 @@ class RedisKeyDeleter:
         """
         slot_key_map = {}
         cursor = 0
-        while True:
+        while not self.stop_event.is_set():
             cursor, keys = redis_client.scan(cursor, match=self.prefix + '*', count=self.scan_count)
             if keys:
                 for key in keys:
@@ -67,7 +72,7 @@ class RedisKeyDeleter:
             if cursor == 0:
                 break
         # 补发剩余部分
-        if self.dry_run is False:
+        if not self.stop_event.is_set() and self.dry_run is False:
             for slot in slot_key_map:
                 for key in slot_key_map[slot]:
                     print(f'key: {key}')
@@ -90,8 +95,8 @@ class RedisKeyDeleter:
         """
         在所有 Redis 节点上并发删除匹配指定前缀的所有键，限制最大线程数
         """
-        with concurrent.futures.ThreadPoolExecutor(max_workers=self.max_threads) as executor:
-            futures = [executor.submit(self._delete_keys_from_redis_node, ip) for ip in self.redis_ips]
+        with self.executor:
+            futures = [self.executor.submit(self._delete_keys_from_redis_node, ip) for ip in self.redis_ips]
             for future in concurrent.futures.as_completed(futures):
                 future.result()  # 等待每个任务完成
 
@@ -111,6 +116,14 @@ class RedisKeyDeleter:
                 slot_dict[slot] = []
             slot_dict[slot].append(key)
         return slot_dict
+
+    # 处理 Ctrl+C 信号
+    def signal_handler(self, sig, frame):
+        print("Ctrl+C pressed. Shutting down the executor gracefully.")
+        self.stop_event.set()
+        self.executor.shutdown(wait=False)  # 不等待，直接关闭
+        print("sys exit(0)")
+        exit(0)  # 程序退出
 
 if __name__ == "__main__":
     # 使用 argparse 获取命令行参数
@@ -144,4 +157,6 @@ if __name__ == "__main__":
     print(
         f'redis ips: {redis_ips}, prefix: {prefix}, max_threads: {max_threads}, scan_count: {scan_count}, pipeline_count: {pipeline_count}, dry_run: {dry_run}, slots: {slots}')
     deleter = RedisKeyDeleter(redis_ips, prefix, max_threads, scan_count, pipeline_count, dry_run, slots)
+    # 设置 Ctrl+C 的信号处理
+    signal.signal(signal.SIGINT, deleter.signal_handler)
     deleter.delete_keys()
