@@ -9,8 +9,8 @@ import crc16
 
 """
     用于批量删除前缀key
-    示例用法，注意最好重定向到audit.log文件里，记录删除的key。在实际使用中，先用--dry-run True空跑，把所有要删除的key打印出来检查是否符合预期，如果符合预期，再用--dry-run False执行真正的删除
-    --dry-run False才会真正执行删除数据，否则只会打印待删除的数据
+    示例用法，注意最好重定向到audit.log文件里，记录删除的key。在实际使用中，先用--dry-run True空跑，把所有要删除的key打印出来检查一遍，同时观察scan操作对线上的影响，如果符合预期，再用--dry-run False执行真正的删除
+    --dry-run False才会真正执行删除数据，True只会打印待删除的数据
     --redis-ips master ip，使用逗号分隔
     python3 ./delete_prefix_keys.py   --redis-ips 10.74.110.58,10.74.40.101,10.74.204.2 --prefix "key:" --max-threads 3 --scan-count 1000 --pipeline-count 500 --dry-run True > audit.log
     python3 ./delete_prefix_keys.py   --redis-ips 10.74.110.58,10.74.40.101,10.74.204.2 --prefix "key:" --max-threads 3 --scan-count 1000 --pipeline-count 500 --dry-run False > audit.log
