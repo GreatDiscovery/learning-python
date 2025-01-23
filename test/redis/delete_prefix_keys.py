@@ -1,4 +1,5 @@
 import signal
+import sys
 import threading
 
 import redis
@@ -12,8 +13,9 @@ import crc16
     示例用法，注意最好重定向到audit.log文件里，记录删除的key。在实际使用中，先用--dry-run True空跑，把所有要删除的key打印出来检查一遍，同时观察scan操作对线上的影响，如果符合预期，再用--dry-run False执行真正的删除
     --dry-run False才会真正执行删除数据，True只会打印待删除的数据
     --redis-ips master ip，使用逗号分隔
-    python3 ./delete_prefix_keys.py   --redis-ips 10.74.110.58,10.74.40.101,10.74.204.2 --prefix "key:" --max-threads 3 --scan-count 1000 --pipeline-count 500 --dry-run True > audit.log
-    python3 ./delete_prefix_keys.py   --redis-ips 10.74.110.58,10.74.40.101,10.74.204.2 --prefix "key:" --max-threads 3 --scan-count 1000 --pipeline-count 500 --dry-run False > audit.log
+    --prefix 填确定的字符，不要包含'*'号
+    python3 ./delete_prefix_keys.py   --redis-ips 10.74.110.58,10.74.40.101,10.74.204.2 --prefix "key:" --max-threads 3 --scan-count 1000 --pipeline-count 500 --dry-run True > audit.log 
+    python3 ./delete_prefix_keys.py   --redis-ips 10.74.110.58,10.74.40.101,10.74.204.2 --prefix "key:" --max-threads 3 --scan-count 1000 --pipeline-count 500 --dry-run False > audit.log 
 """
 
 
@@ -52,12 +54,17 @@ class RedisKeyDeleter:
         cursor = 0
         while not self.stop_event.is_set():
             cursor, keys = redis_client.scan(cursor, match=self.prefix + '*', count=self.scan_count)
+            if self.dry_run:
+                print(f"dry run deleted {len(keys)} keys from {redis_client.connection_pool.connection_kwargs['host']}",
+                  file=sys.stderr)
+            else:
+                print(f"deleted {len(keys)} keys from {redis_client.connection_pool.connection_kwargs['host']}",
+                  file=sys.stderr)
             if keys:
                 for key in keys:
-                    if self.dry_run is True:
+                    if self.dry_run:
                         print(f"dry run deleted key: {key}")
                     else:
-                        # print(f"Deleted {len(keys)} keys from {redis_client.connection_pool.connection_kwargs['host']}")
                         slot = self.redis_crc16(key)
                         if slot not in slot_key_map:
                             slot_key_map[slot] = []
@@ -100,7 +107,7 @@ class RedisKeyDeleter:
             for future in concurrent.futures.as_completed(futures):
                 future.result()  # 等待每个任务完成
 
-        print("Finished deleting keys from all Redis nodes.")
+        print("Finished deleting keys from all Redis nodes.", file=sys.stderr)
 
     def redis_crc16(self, raw_key):
         # Redis的CRC16算法是基于CCITT标准的CRC16算法的变种
@@ -119,10 +126,10 @@ class RedisKeyDeleter:
 
     # 处理 Ctrl+C 信号
     def signal_handler(self, sig, frame):
-        print("Ctrl+C pressed. Shutting down the executor gracefully.")
+        print("Ctrl+C pressed. Shutting down the executor gracefully.", file=sys.stderr)
         self.stop_event.set()
         self.executor.shutdown(wait=False)  # 不等待，直接关闭
-        print("sys exit(0)")
+        print("sys exit(0)", file=sys.stderr)
         exit(0)  # 程序退出
 
 if __name__ == "__main__":
@@ -151,11 +158,14 @@ if __name__ == "__main__":
     slots = args.slots
 
     if prefix == "" or prefix is None:
-        print("prefix cannot be empty")
+        print("prefix cannot be empty", file=sys.stderr)
+        exit(1)
+    elif '*' in prefix:
+        print("prefix cannot contain '*'", file=sys.stderr)
         exit(1)
     # 创建 RedisKeyDeleter 实例并删除前缀键
     print(
-        f'redis ips: {redis_ips}, prefix: {prefix}, max_threads: {max_threads}, scan_count: {scan_count}, pipeline_count: {pipeline_count}, dry_run: {dry_run}, slots: {slots}')
+        f'redis ips: {redis_ips}, prefix: {prefix}, max_threads: {max_threads}, scan_count: {scan_count}, pipeline_count: {pipeline_count}, dry_run: {dry_run}, slots: {slots}', file=sys.stderr)
     deleter = RedisKeyDeleter(redis_ips, prefix, max_threads, scan_count, pipeline_count, dry_run, slots)
     # 设置 Ctrl+C 的信号处理
     signal.signal(signal.SIGINT, deleter.signal_handler)

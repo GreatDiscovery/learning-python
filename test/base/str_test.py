@@ -3,6 +3,13 @@ import unittest
 
 
 class TestStrExample(unittest.TestCase):
+    def testContain(self):
+        name = "hello world"
+        assert "hello" in name
+        assert "world" in name
+        assert " " in name
+        assert "a" not in name
+
     def testPrint(self):
         name = "hello"
         age = 15
