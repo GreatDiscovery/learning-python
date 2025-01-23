@@ -69,9 +69,9 @@ class RedisKeyDeleter:
                         if slot not in slot_key_map:
                             slot_key_map[slot] = []
                         slot_key_map[slot].append(key)
-                        if slot_key_map[slot] and len(slot_key_map[slot]) >= self.pipeline_count:
+                        if len(slot_key_map[slot]) >= self.pipeline_count:
                             for k in slot_key_map[slot]:
-                                print(f'key: {k}')
+                                print(f"{k.decode('utf-8')}")
                                 pipeline = redis_client.pipeline()
                                 pipeline.delete(k)
                                 pipeline.execute()
@@ -82,7 +82,9 @@ class RedisKeyDeleter:
         if not self.stop_event.is_set() and self.dry_run is False:
             for slot in slot_key_map:
                 for key in slot_key_map[slot]:
-                    print(f'key: {key}')
+                    if self.stop_event.is_set():
+                        break
+                    print(f"{key.decode('utf-8')}")
                     pipeline = redis_client.pipeline()
                     pipeline.delete(key)
                     pipeline.execute()
