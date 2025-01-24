@@ -3,6 +3,16 @@ import unittest
 
 
 class TestStrExample(unittest.TestCase):
+    def testChinese(self):
+        name = "宋"
+        assert len(name.encode("GBK")) == 2
+        assert len(name.encode("utf-8")) == 3
+
+        name = "a宋"
+        assert len(name.encode("GBK")) == 3
+        assert len(name.encode("utf-8")) == 4
+
+
     def testContain(self):
         name = "hello world"
         assert "hello" in name
