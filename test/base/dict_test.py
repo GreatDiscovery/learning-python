@@ -34,3 +34,6 @@ class TestDictExample(unittest.TestCase):
             print('v2 is None')
         else:
             print(v2)
+
+        assert tinydict.get("A", "A") == "A"
+        assert tinydict.get("Name") == "Zara"
