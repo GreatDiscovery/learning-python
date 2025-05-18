@@ -7,7 +7,7 @@ import time
 import redis
 import argparse
 import concurrent.futures
-from redis.exceptions import RedisError, ResponseError
+from redis.exceptions import RedisError, ResponseError, ReadOnlyError
 from threading import Lock
 
 """
@@ -15,7 +15,7 @@ from threading import Lock
     支持并发处理多个master节点，每个节点使用scan扫描出前缀key，然后使用pipeline批量删除
     
     参数说明：
-    --redis-ips master节点IP列表，用逗号分隔
+    --redis-ips Redis节点IP列表，用逗号分隔
     --prefix 要删除的key前缀
     --scan-count scan命令每次扫描的key数量，默认1000
     --pipeline-size pipeline批量删除的大小，默认200
@@ -24,18 +24,24 @@ from threading import Lock
     --connect-timeout Redis连接超时时间（秒），默认5秒
     --max-retries 操作失败时的最大重试次数，默认3次
     --max-workers 最大并发处理节点数，默认3
+    --port Redis端口，默认6379
+    --password Redis密码，默认无
+    --only-master 是否只连接master节点，默认True
+    --skip-slave 是否跳过slave节点，默认True
+    --output-file 输出文件路径，默认audit.log
 
     示例命令：
     # 先进行空跑测试
-    python3 ./delete_cluster_prefix_keys.py --redis-ips 10.74.110.58,10.74.40.101,10.74.204.2 --prefix "key:" --dry-run True > audit.log
+    python3 ./delete_cluster_prefix_keys.py --redis-ips 10.74.110.58,10.74.40.101,10.74.204.2 --prefix "key:" --dry-run True --output-file audit.log
     
     # 确认无误后执行实际删除
-    python3 ./delete_cluster_prefix_keys.py --redis-ips 10.74.110.58,10.74.40.101,10.74.204.2 --prefix "key:" --dry-run False > audit.log
+    python3 ./delete_cluster_prefix_keys.py --redis-ips 10.74.110.58,10.74.40.101,10.74.204.2 --prefix "key:" --dry-run False --output-file audit.log
 """
 
 class ClusterKeyDeleter:
     def __init__(self, redis_ips, prefix, scan_count=1000, pipeline_size=200, delete_interval=100,
-                 dry_run=True, connect_timeout=5, max_retries=3, max_workers=3):
+                 dry_run=True, connect_timeout=5, max_retries=3, max_workers=3, port=6379, password=None,
+                 only_master=True, skip_slave=True, output_file='audit.log'):
         self.redis_ips = redis_ips
         self.prefix = prefix
         self.scan_count = scan_count
@@ -45,10 +51,16 @@ class ClusterKeyDeleter:
         self.connect_timeout = connect_timeout
         self.max_retries = max_retries
         self.max_workers = max_workers
+        self.port = port
+        self.password = password
+        self.only_master = only_master
+        self.skip_slave = skip_slave
+        self.output_file = output_file
         self.stop_event = False
         self.total_deleted = 0
         self.total_deleted_lock = Lock()
         self.print_lock = Lock()
+        self.file_lock = Lock()
 
     def _retry_operation(self, operation, *args, **kwargs):
         """重试机制"""
@@ -57,17 +69,42 @@ class ClusterKeyDeleter:
                 return operation(*args, **kwargs)
             except RedisError as e:
                 if attempt == self.max_retries - 1:
-                    print(f"Operation failed after {self.max_retries} attempts: {str(e)}", file=sys.stderr)
+                    self._safe_print(f"Operation failed after {self.max_retries} attempts: {str(e)}", True)
                     raise
                 time.sleep(1)  # 重试前等待1秒
 
     def _safe_print(self, message, is_error=False):
-        """线程安全的打印"""
+        """线程安全的打印到控制台"""
         with self.print_lock:
             if is_error:
                 print(message, file=sys.stderr)
             else:
                 print(message)
+
+    def _write_to_file(self, message):
+        """线程安全的写入文件"""
+        with self.file_lock:
+            with open(self.output_file, 'a', encoding='utf-8') as f:
+                f.write(message + '\n')
+
+    def _is_master(self, redis_client):
+        """检查节点是否为master"""
+        try:
+            info = redis_client.info('replication')
+            role = info.get('role')
+            if role == 'master':
+                return True
+            elif role == 'slave':
+                master_host = info.get('master_host', 'unknown')
+                master_port = info.get('master_port', 'unknown')
+                self._safe_print(f"\n{'='*50}\n警告：节点是slave节点！\n主节点信息：{master_host}:{master_port}\n{'='*50}\n", True)
+                return False
+            else:
+                self._safe_print(f"\n{'='*50}\n警告：未知的节点角色：{role}\n{'='*50}\n", True)
+                return False
+        except Exception as e:
+            self._safe_print(f"\n{'='*50}\n错误：检查节点角色失败：{str(e)}\n{'='*50}\n", True)
+            return False
 
     def _process_node(self, ip):
         """处理单个Redis节点"""
@@ -75,10 +112,23 @@ class ClusterKeyDeleter:
             # 创建Redis连接
             r = redis.StrictRedis(
                 host=ip,
-                port=6379,
+                port=self.port,
+                password=self.password,
                 socket_timeout=self.connect_timeout,
                 socket_connect_timeout=self.connect_timeout
             )
+            
+            # 检查节点角色
+            is_master = self._is_master(r)
+            if not is_master:
+                if self.only_master:
+                    if self.skip_slave:
+                        self._safe_print(f"\n{'='*50}\n跳过slave节点：{ip}\n{'='*50}\n", True)
+                        return
+                    else:
+                        self._safe_print(f"\n{'='*50}\n警告：{ip} 是slave节点，将尝试处理但可能会失败\n{'='*50}\n", True)
+                else:
+                    self._safe_print(f"\n{'='*50}\n处理slave节点：{ip}\n{'='*50}\n", True)
             
             # 创建pipeline
             pipeline = r.pipeline(transaction=False)
@@ -100,25 +150,38 @@ class ClusterKeyDeleter:
                     if keys:
                         for key in keys:
                             if self.dry_run:
-                                self._safe_print(f"dry run deleted key: {key}")
+                                self._write_to_file(f"dry run deleted key: {key}")
                             else:
-                                self._safe_print(f"{key.decode('utf-8')}")
-                                pipeline.delete(key)
-                                pipeline_size += 1
-                                node_deleted += 1
-                                
-                                # 当pipeline达到指定大小时执行
-                                if pipeline_size >= self.pipeline_size:
-                                    try:
-                                        pipeline.execute()
-                                        with self.total_deleted_lock:
-                                            self.total_deleted += pipeline_size
-                                        self._safe_print(f"Deleted {pipeline_size} keys from {ip}, node total: {node_deleted}, global total: {self.total_deleted}", True)
-                                        pipeline_size = 0
-                                        if self.delete_interval > 0:
-                                            time.sleep(self.delete_interval)
-                                    except ResponseError as e:
-                                        self._safe_print(f"Pipeline execution error on {ip}: {str(e)}", True)
+                                try:
+                                    self._write_to_file(f"{key.decode('utf-8')}")
+                                    pipeline.delete(key)
+                                    pipeline_size += 1
+                                    node_deleted += 1
+                                    
+                                    # 当pipeline达到指定大小时执行
+                                    if pipeline_size >= self.pipeline_size:
+                                        try:
+                                            pipeline.execute()
+                                            with self.total_deleted_lock:
+                                                self.total_deleted += pipeline_size
+                                            self._safe_print(f"Deleted {pipeline_size} keys from {ip}, node total: {node_deleted}, global total: {self.total_deleted}", True)
+                                            pipeline_size = 0
+                                            if self.delete_interval > 0:
+                                                time.sleep(self.delete_interval)
+                                        except ReadOnlyError:
+                                            if not is_master:
+                                                self._safe_print(f"\n{'='*50}\n错误：节点 {ip} 是slave节点，跳过删除操作\n{'='*50}\n", True)
+                                            else:
+                                                self._safe_print(f"\n{'='*50}\n错误：节点 {ip} 变为只读状态，跳过删除操作\n{'='*50}\n", True)
+                                            return
+                                        except ResponseError as e:
+                                            self._safe_print(f"Pipeline execution error on {ip}: {str(e)}", True)
+                                except ReadOnlyError:
+                                    if not is_master:
+                                        self._safe_print(f"\n{'='*50}\n错误：节点 {ip} 是slave节点，跳过删除操作\n{'='*50}\n", True)
+                                    else:
+                                        self._safe_print(f"\n{'='*50}\n错误：节点 {ip} 变为只读状态，跳过删除操作\n{'='*50}\n", True)
+                                    return
                     
                     if cursor == 0:
                         break
@@ -134,6 +197,11 @@ class ClusterKeyDeleter:
                     with self.total_deleted_lock:
                         self.total_deleted += pipeline_size
                     self._safe_print(f"Deleted {pipeline_size} keys from {ip}, node total: {node_deleted}, global total: {self.total_deleted}", True)
+                except ReadOnlyError:
+                    if not is_master:
+                        self._safe_print(f"\n{'='*50}\n错误：节点 {ip} 是slave节点，跳过删除操作\n{'='*50}\n", True)
+                    else:
+                        self._safe_print(f"\n{'='*50}\n错误：节点 {ip} 变为只读状态，跳过删除操作\n{'='*50}\n", True)
                 except ResponseError as e:
                     self._safe_print(f"Pipeline execution error on {ip}: {str(e)}", True)
             
@@ -166,7 +234,7 @@ class ClusterKeyDeleter:
 
 def main():
     parser = argparse.ArgumentParser(description="Delete Redis keys with a specified prefix from multiple nodes concurrently.")
-    parser.add_argument('--redis-ips', type=str, required=True, help='Comma-separated list of Redis master IPs')
+    parser.add_argument('--redis-ips', type=str, required=True, help='Comma-separated list of Redis node IPs')
     parser.add_argument('--prefix', type=str, required=True, help='Prefix of the Redis keys to delete')
     parser.add_argument('--scan-count', type=int, default=1000, help='Number of keys to scan per iteration (default: 1000)')
     parser.add_argument('--pipeline-size', type=int, default=200, help='Number of keys to delete in one pipeline (default: 200)')
@@ -175,6 +243,11 @@ def main():
     parser.add_argument('--connect-timeout', type=int, default=5, help='Redis connection timeout in seconds (default: 5)')
     parser.add_argument('--max-retries', type=int, default=3, help='Maximum number of retries for failed operations (default: 3)')
     parser.add_argument('--max-workers', type=int, default=3, help='Maximum number of concurrent nodes to process (default: 3)')
+    parser.add_argument('--port', type=int, default=6379, help='Redis port (default: 6379)')
+    parser.add_argument('--password', type=str, help='Redis password (default: None)')
+    parser.add_argument('--only-master', type=str, default='True', help='Only connect to master nodes (default: True)')
+    parser.add_argument('--skip-slave', type=str, default='True', help='Skip slave nodes (default: True)')
+    parser.add_argument('--output-file', type=str, default='audit.log', help='Output file path (default: audit.log)')
 
     args = parser.parse_args()
 
@@ -183,6 +256,14 @@ def main():
     dry_run = True
     if args.dry_run.lower() == 'false':
         dry_run = False
+    
+    only_master = True
+    if args.only_master.lower() == 'false':
+        only_master = False
+    
+    skip_slave = True
+    if args.skip_slave.lower() == 'false':
+        skip_slave = False
 
     if not args.prefix:
         print("prefix cannot be empty", file=sys.stderr)
@@ -201,7 +282,12 @@ def main():
         dry_run=dry_run,
         connect_timeout=args.connect_timeout,
         max_retries=args.max_retries,
-        max_workers=args.max_workers
+        max_workers=args.max_workers,
+        port=args.port,
+        password=args.password,
+        only_master=only_master,
+        skip_slave=skip_slave,
+        output_file=args.output_file
     )
 
     # 设置信号处理
@@ -218,7 +304,12 @@ def main():
         f'  Dry run: {dry_run}\n'
         f'  Connect timeout: {args.connect_timeout}s\n'
         f'  Max retries: {args.max_retries}\n'
-        f'  Max workers: {args.max_workers}',
+        f'  Max workers: {args.max_workers}\n'
+        f'  Port: {args.port}\n'
+        f'  Password: {"*" * 8 if args.password else "None"}\n'
+        f'  Only master: {only_master}\n'
+        f'  Skip slave: {skip_slave}\n'
+        f'  Output file: {args.output_file}',
         file=sys.stderr
     )
 
