@@ -24,7 +24,7 @@ from typing import List, Dict, Any
     支持并发处理多个master节点，每个节点使用scan扫描出前缀key，然后使用pipeline批量删除
     
     参数说明：
-    --redis-ips Redis节点IP列表，用逗号分隔
+    --redis-ips Redis节点IP列表，用逗号分隔，可以输入全部的节点，程序会自动跳过slave节点
     --prefix 要删除的key前缀
     --scan-count scan命令每次扫描的key数量，默认1000
     --pipeline-size pipeline批量删除的大小，默认200
