@@ -182,14 +182,20 @@ class ClusterKeyDeleter:
     def _setup_logging(self, log_level: str):
         """设置日志配置"""
         log_format = '%(asctime)s - %(levelname)s - %(message)s'
-        logging.basicConfig(
-            level=getattr(logging, log_level.upper()),
-            format=log_format,
-            handlers=[
-                logging.FileHandler('redis_deleter.log'),
-                logging.StreamHandler()
-            ]
-        )
+        
+        # 创建日志记录器
+        logger = logging.getLogger()
+        logger.setLevel(getattr(logging, log_level.upper()))
+        
+        # 创建文件处理器
+        file_handler = logging.FileHandler('redis_key_deleter.log')
+        file_handler.setFormatter(logging.Formatter(log_format))
+        logger.addHandler(file_handler)
+        
+        # 创建控制台处理器
+        console_handler = logging.StreamHandler()
+        console_handler.setFormatter(logging.Formatter(log_format))
+        logger.addHandler(console_handler)
 
     def _stats_worker(self):
         """统计信息输出线程"""
@@ -499,7 +505,7 @@ def main():
     parser.add_argument('--password', type=str, help='Redis password (default: None)')
     parser.add_argument('--only-master', type=str, default='True', help='Only connect to master nodes (default: True)')
     parser.add_argument('--skip-slave', type=str, default='True', help='Skip slave nodes (default: True)')
-    parser.add_argument('--output-file', type=str, default='audit.log', help='Output file path (default: audit.log)')
+    parser.add_argument('--output-file', type=str, default='audit.log', help='Output file path for deleted keys (default: audit.log)')
     parser.add_argument('--buffer-size', type=int, default=1000, help='File write buffer size (default: 1000)')
     parser.add_argument('--compress', type=str, default='False', help='Compress output file (default: False)')
     parser.add_argument('--log-level', type=str, default='INFO', help='Logging level (default: INFO)')
@@ -511,7 +517,11 @@ def main():
     args = parser.parse_args()
 
     # 处理参数
-    redis_ips = args.redis_ips.split(',')
+    redis_ips = [ip.strip() for ip in args.redis_ips.split(',') if ip.strip()]
+    if not redis_ips:
+        print("Error: No valid Redis IPs provided", file=sys.stderr)
+        sys.exit(1)
+        
     dry_run = True
     if args.dry_run.lower() == 'false':
         dry_run = False
