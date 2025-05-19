@@ -72,10 +72,10 @@ except ImportError:
 
     示例命令：
     # 先进行空跑测试
-    python3 ./delete_cluster_prefix_keys.py --redis-ips 10.74.110.58,10.74.40.101,10.74.204.2 --prefix "key:" --dry-run True --output-file audit.log
+    python3 ./redis_delete_prefix_keys.py --redis-ips 10.74.110.58,10.74.40.101,10.74.204.2 --prefix "key:" --dry-run True --output-file audit.log
     
     # 确认无误后执行实际删除
-    python3 ./delete_cluster_prefix_keys.py --redis-ips 10.74.110.58,10.74.40.101,10.74.204.2 --prefix "key:" --dry-run False --output-file audit.log
+    python3 ./redis_delete_prefix_keys.py --redis-ips 10.74.110.58,10.74.40.101,10.74.204.2 --prefix "key:" --dry-run False --output-file audit.log
 """
 
 class FileWriter:
