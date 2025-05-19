@@ -159,6 +159,7 @@ class ClusterKeyDeleter:
             'retries': 0
         }
         self.stats_lock = Lock()
+        self.processed_nodes = set()  # 用于跟踪已处理的节点
         
         # 启动统计信息线程
         self.stats_thread = threading.Thread(target=self._stats_worker, daemon=True)
@@ -243,6 +244,7 @@ class ClusterKeyDeleter:
         try:
             info = redis_client.info('replication')
             role = info.get('role')
+            current_ip = redis_client.connection_pool.connection_kwargs.get('host')
             if role == 'master':
                 return True
             elif role == 'slave':
@@ -251,6 +253,7 @@ class ClusterKeyDeleter:
                 warning_msg = (
                     f"\n{'='*80}\n"
                     f"⚠️ 警告：当前节点是slave节点！\n"
+                    f"当前节点：{current_ip}\n"
                     f"主节点信息：{master_host}:{master_port}\n"
                     f"{'='*80}\n"
                 )
@@ -260,6 +263,7 @@ class ClusterKeyDeleter:
                 warning_msg = (
                     f"\n{'='*80}\n"
                     f"⚠️ 警告：未知的节点角色：{role}\n"
+                    f"当前节点：{current_ip}\n"
                     f"{'='*80}\n"
                 )
                 logging.warning(warning_msg)
@@ -274,6 +278,20 @@ class ClusterKeyDeleter:
             )
             logging.error(error_msg)
             return False
+
+    def _print_unprocessed_nodes(self):
+        """打印未处理的节点信息"""
+        processed = self.processed_nodes
+        unprocessed = set(self.redis_ips) - processed
+        
+        if unprocessed:
+            warning_msg = (
+                f"\n{'='*80}\n"
+                f"⚠️ 警告：以下节点未被处理：\n"
+                f"{','.join(unprocessed)}\n"
+                f"{'='*80}\n"
+            )
+            self._safe_print(warning_msg)  # 只使用控制台打印，不使用logging
 
     def _process_node(self, ip: str):
         """处理单个Redis节点"""
@@ -292,6 +310,7 @@ class ClusterKeyDeleter:
                         logging.info(f"Skipping slave node: {ip}")
                         with self.stats_lock:
                             self.stats['nodes_skipped'] += 1
+                        self.processed_nodes.add(ip)  # 标记为已处理
                         return
                     else:
                         logging.warning(f"Node {ip} is slave, will try to process but may fail")
@@ -382,6 +401,7 @@ class ClusterKeyDeleter:
             with self.stats_lock:
                 self.stats['nodes_processed'] += 1
             logging.info(f"Finished processing node {ip}, total deleted: {node_deleted}")
+            self.processed_nodes.add(ip)  # 标记为已处理
             
         except Exception as e:
             logging.error(f"Error processing node {ip}: {str(e)}")
@@ -416,6 +436,9 @@ class ClusterKeyDeleter:
         except Exception as e:
             logging.error(f"Error in thread pool: {str(e)}")
         finally:
+            # 打印未处理的节点信息
+            self._print_unprocessed_nodes()
+            
             # 确保所有数据都写入文件
             logging.info("Stopping file writer...")
             self.stop_event = True
