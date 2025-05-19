@@ -1,6 +1,17 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
+"""
+设计要点：
+1. 核心功能：并发删除多Redis节点前缀key，使用scan+pipeline提高效率。同时对多个Redis节点进行并发操作
+2. 安全性：自动识别slave节点，支持dry-run预演，提前查看删除的key数量；同时记录audit日志，记录所有删除的key，方便日后审计
+3. 健壮性：完善的错误处理和重试机制，支持优雅退出，避免因单个节点问题导致整个脚本崩溃
+4. 性能优化：使用Redis连接池管理，批量删除，文件缓冲写入，避免频繁的文件操作
+5. 监控统计：实时统计信息，详细日志记录，内存监控。实时打印统计信息，方便运维查看
+6. 配置灵活：丰富的命令行参数，可调整的并发度和超时时间
+7. 资源管理：连接池、内存限制、任务超时控制
+"""
+
 import signal
 import sys
 import time
@@ -21,7 +32,10 @@ from typing import List, Dict, Any
 
 """
     用于并发删除多个Redis节点的前缀key
-    支持并发处理多个master节点，每个节点使用scan扫描出前缀key，然后使用pipeline批量删除
+    支持并发处理多个master节点，每个节点使用scan扫描出前缀key，然后使用pipeline批量删除。
+    ⚠️：使用前先对单个master节点进行dry-run测试，确保脚本没有问题后，再对单个master进行实际删除。最后再对多个master进行批量删除
+    
+
     
     参数说明：
     --redis-ips Redis节点IP列表，用逗号分隔，可以输入全部的节点，程序会自动跳过slave节点
