@@ -10,6 +10,9 @@
 5. 监控统计：实时统计信息，详细日志记录，内存监控。实时打印统计信息，方便运维查看
 6. 配置灵活：丰富的命令行参数，可调整的并发度和超时时间
 7. 资源管理：连接池、内存限制、任务超时控制
+
+使用前pip3 install redis
+psutil模块可选，用于显示内存使用情况
 """
 
 import signal
@@ -26,9 +29,16 @@ import logging
 import os
 import json
 from datetime import datetime
-import psutil
 import gzip
 from typing import List, Dict, Any
+
+# 尝试导入psutil，如果失败则设置为None
+try:
+    import psutil
+    HAS_PSUTIL = True
+except ImportError:
+    HAS_PSUTIL = False
+    psutil = None
 
 """
     用于并发删除多个Redis节点的前缀key
@@ -36,7 +46,7 @@ from typing import List, Dict, Any
     ⚠️：使用前先对单个master节点进行dry-run测试，确保脚本没有问题后，再对单个master进行实际删除。最后再对多个master进行批量删除
     
 
-    
+    使用前pip3 install redis psutil
     参数说明：
     --redis-ips Redis节点IP列表，用逗号分隔，可以输入全部的节点，程序会自动跳过slave节点
     --prefix 要删除的key前缀
@@ -208,7 +218,6 @@ class ClusterKeyDeleter:
         with self.stats_lock:
             current_time = time.time()
             duration = current_time - self.stats['start_time']
-            memory_usage = psutil.Process().memory_info().rss
             
             stats_msg = (
                 f"\n{'='*50}\n"
@@ -218,7 +227,13 @@ class ClusterKeyDeleter:
                 f"删除key数: {self.total_deleted}\n"
                 f"错误数: {self.stats['errors']}\n"
                 f"重试次数: {self.stats['retries']}\n"
-                f"内存使用: {memory_usage/1024/1024:.2f}MB\n"
+            )
+            
+            if HAS_PSUTIL:
+                memory_usage = psutil.Process().memory_info().rss
+                stats_msg += f"内存使用: {memory_usage/1024/1024:.2f}MB\n"
+            
+            stats_msg += (
                 f"文件写入: {self.file_writer.total_written}行\n"
                 f"{'='*50}\n"
             )
@@ -226,6 +241,8 @@ class ClusterKeyDeleter:
 
     def _check_memory(self):
         """检查内存使用"""
+        if not HAS_PSUTIL:
+            return True
         memory_usage = psutil.Process().memory_info().rss
         if memory_usage > self.max_memory:
             logging.warning(f"Memory usage ({memory_usage/1024/1024:.2f}MB) exceeds limit ({self.max_memory/1024/1024:.2f}MB)")
