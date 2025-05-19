@@ -9,6 +9,15 @@ import argparse
 import concurrent.futures
 from redis.exceptions import RedisError, ResponseError, ReadOnlyError
 from threading import Lock
+from queue import Queue
+import threading
+import logging
+import os
+import json
+from datetime import datetime
+import psutil
+import gzip
+from typing import List, Dict, Any
 
 """
     用于并发删除多个Redis节点的前缀key
@@ -29,6 +38,13 @@ from threading import Lock
     --only-master 是否只连接master节点，默认True
     --skip-slave 是否跳过slave节点，默认True
     --output-file 输出文件路径，默认audit.log
+    --buffer-size 文件写入缓冲区大小，默认1000
+    --compress 是否压缩输出文件，默认False
+    --log-level 日志级别，默认INFO
+    --max-memory 最大内存使用限制（MB），默认1024
+    --stats-interval 统计信息输出间隔（秒），默认60
+    --task-timeout 单个任务超时时间（秒），默认3600秒
+    --overall-timeout 整体超时时间（秒），默认86400秒
 
     示例命令：
     # 先进行空跑测试
@@ -38,10 +54,63 @@ from threading import Lock
     python3 ./delete_cluster_prefix_keys.py --redis-ips 10.74.110.58,10.74.40.101,10.74.204.2 --prefix "key:" --dry-run False --output-file audit.log
 """
 
+class FileWriter:
+    def __init__(self, output_file: str, buffer_size: int = 1000, compress: bool = False):
+        self.output_file = output_file
+        self.buffer_size = buffer_size
+        self.compress = compress
+        self.buffer: List[str] = []
+        self.buffer_lock = Lock()
+        self.total_written = 0
+        self.last_flush_time = time.time()
+        self.flush_interval = 60  # 60秒强制刷新一次
+        logging.info("File writer initialized")
+
+    def _write_lines(self, lines: List[str]):
+        """写入行到文件"""
+        try:
+            mode = 'ab' if self.compress else 'a'
+            open_func = gzip.open if self.compress else open
+            with open_func(self.output_file, mode, encoding='utf-8' if not self.compress else None) as f:
+                content = '\n'.join(lines) + '\n'
+                if self.compress:
+                    f.write(content.encode('utf-8'))
+                else:
+                    f.write(content)
+            self.total_written += len(lines)
+        except Exception as e:
+            logging.error(f"Error writing to file: {str(e)}")
+
+    def write(self, message: str):
+        """添加消息到缓冲区，如果缓冲区满了就写入文件"""
+        with self.buffer_lock:
+            self.buffer.append(message)
+            current_time = time.time()
+            should_flush = (len(self.buffer) >= self.buffer_size or 
+                          current_time - self.last_flush_time >= self.flush_interval)
+            
+            if should_flush:
+                lines = self.buffer
+                self.buffer = []
+                self.last_flush_time = current_time
+                self._write_lines(lines)
+
+    def stop(self):
+        """写入剩余的数据并关闭文件"""
+        with self.buffer_lock:
+            if self.buffer:
+                logging.info(f"Writing remaining {len(self.buffer)} lines...")
+                self._write_lines(self.buffer)
+                self.buffer = []
+        logging.info(f"File writer stopped, total written: {self.total_written} lines")
+
 class ClusterKeyDeleter:
-    def __init__(self, redis_ips, prefix, scan_count=1000, pipeline_size=200, delete_interval=100,
-                 dry_run=True, connect_timeout=5, max_retries=3, max_workers=3, port=6379, password=None,
-                 only_master=True, skip_slave=True, output_file='audit.log'):
+    def __init__(self, redis_ips: List[str], prefix: str, scan_count: int = 1000, pipeline_size: int = 200,
+                 delete_interval: float = 100, dry_run: bool = True, connect_timeout: int = 5, max_retries: int = 3,
+                 max_workers: int = 3, port: int = 6379, password: str = None, only_master: bool = True,
+                 skip_slave: bool = True, output_file: str = 'audit.log', buffer_size: int = 1000,
+                 compress: bool = False, log_level: str = 'INFO', max_memory: int = 1024,
+                 stats_interval: int = 60, task_timeout: int = 3600, overall_timeout: int = 86400):
         self.redis_ips = redis_ips
         self.prefix = prefix
         self.scan_count = scan_count
@@ -55,12 +124,92 @@ class ClusterKeyDeleter:
         self.password = password
         self.only_master = only_master
         self.skip_slave = skip_slave
-        self.output_file = output_file
+        self.compress = compress
+        self.max_memory = max_memory * 1024 * 1024  # 转换为字节
+        self.stats_interval = stats_interval
+        self.task_timeout = task_timeout  # 单个任务超时时间（秒）
+        self.overall_timeout = overall_timeout  # 整体超时时间（秒）
+        
+        # 设置日志
+        self._setup_logging(log_level)
+        
+        # 创建连接池
+        self.pools = {}  # 为每个节点创建独立的连接池
+        for ip in redis_ips:
+            self.pools[ip] = redis.ConnectionPool(
+                host=ip,
+                port=port,
+                password=password,
+                max_connections=2,  # 每个节点最多2个连接
+                socket_timeout=connect_timeout,
+                socket_connect_timeout=connect_timeout,
+                decode_responses=True  # 自动解码响应
+            )
+        
+        self.file_writer = FileWriter(output_file, buffer_size, compress)
         self.stop_event = False
         self.total_deleted = 0
         self.total_deleted_lock = Lock()
         self.print_lock = Lock()
-        self.file_lock = Lock()
+        self.stats = {
+            'start_time': time.time(),
+            'nodes_processed': 0,
+            'nodes_skipped': 0,
+            'errors': 0,
+            'retries': 0
+        }
+        self.stats_lock = Lock()
+        
+        # 启动统计信息线程
+        self.stats_thread = threading.Thread(target=self._stats_worker, daemon=True)
+        self.stats_thread.start()
+
+    def _setup_logging(self, log_level: str):
+        """设置日志配置"""
+        log_format = '%(asctime)s - %(levelname)s - %(message)s'
+        logging.basicConfig(
+            level=getattr(logging, log_level.upper()),
+            format=log_format,
+            handlers=[
+                logging.FileHandler('redis_deleter.log'),
+                logging.StreamHandler()
+            ]
+        )
+
+    def _stats_worker(self):
+        """统计信息输出线程"""
+        while not self.stop_event:
+            self._print_stats()
+            time.sleep(self.stats_interval)
+
+    def _print_stats(self):
+        """打印统计信息"""
+        with self.stats_lock:
+            current_time = time.time()
+            duration = current_time - self.stats['start_time']
+            memory_usage = psutil.Process().memory_info().rss
+            
+            stats_msg = (
+                f"\n{'='*50}\n"
+                f"运行时间: {duration:.2f}秒\n"
+                f"已处理节点: {self.stats['nodes_processed']}\n"
+                f"跳过节点: {self.stats['nodes_skipped']}\n"
+                f"删除key数: {self.total_deleted}\n"
+                f"错误数: {self.stats['errors']}\n"
+                f"重试次数: {self.stats['retries']}\n"
+                f"内存使用: {memory_usage/1024/1024:.2f}MB\n"
+                f"文件写入: {self.file_writer.total_written}行\n"
+                f"{'='*50}\n"
+            )
+            self._safe_print(stats_msg)
+
+    def _check_memory(self):
+        """检查内存使用"""
+        memory_usage = psutil.Process().memory_info().rss
+        if memory_usage > self.max_memory:
+            logging.warning(f"Memory usage ({memory_usage/1024/1024:.2f}MB) exceeds limit ({self.max_memory/1024/1024:.2f}MB)")
+            return False
+        return True
 
     def _retry_operation(self, operation, *args, **kwargs):
         """重试机制"""
@@ -68,12 +217,16 @@ class ClusterKeyDeleter:
             try:
                 return operation(*args, **kwargs)
             except RedisError as e:
+                with self.stats_lock:
+                    self.stats['retries'] += 1
                 if attempt == self.max_retries - 1:
-                    self._safe_print(f"Operation failed after {self.max_retries} attempts: {str(e)}", True)
+                    logging.error(f"Operation failed after {self.max_retries} attempts: {str(e)}")
+                    with self.stats_lock:
+                        self.stats['errors'] += 1
                     raise
                 time.sleep(1)  # 重试前等待1秒
 
-    def _safe_print(self, message, is_error=False):
+    def _safe_print(self, message: str, is_error: bool = False):
         """线程安全的打印到控制台"""
         with self.print_lock:
             if is_error:
@@ -81,13 +234,11 @@ class ClusterKeyDeleter:
             else:
                 print(message)
 
-    def _write_to_file(self, message):
-        """线程安全的写入文件"""
-        with self.file_lock:
-            with open(self.output_file, 'a', encoding='utf-8') as f:
-                f.write(message + '\n')
+    def _write_to_file(self, message: str):
+        """写入消息到文件缓冲区"""
+        self.file_writer.write(message)
 
-    def _is_master(self, redis_client):
+    def _is_master(self, redis_client) -> bool:
         """检查节点是否为master"""
         try:
             info = redis_client.info('replication')
@@ -97,25 +248,40 @@ class ClusterKeyDeleter:
             elif role == 'slave':
                 master_host = info.get('master_host', 'unknown')
                 master_port = info.get('master_port', 'unknown')
-                self._safe_print(f"\n{'='*50}\n警告：节点是slave节点！\n主节点信息：{master_host}:{master_port}\n{'='*50}\n", True)
+                warning_msg = (
+                    f"\n{'='*80}\n"
+                    f"⚠️ 警告：当前节点是slave节点！\n"
+                    f"主节点信息：{master_host}:{master_port}\n"
+                    f"{'='*80}\n"
+                )
+                logging.warning(warning_msg)
                 return False
             else:
-                self._safe_print(f"\n{'='*50}\n警告：未知的节点角色：{role}\n{'='*50}\n", True)
+                warning_msg = (
+                    f"\n{'='*80}\n"
+                    f"⚠️ 警告：未知的节点角色：{role}\n"
+                    f"{'='*80}\n"
+                )
+                logging.warning(warning_msg)
                 return False
         except Exception as e:
-            self._safe_print(f"\n{'='*50}\n错误：检查节点角色失败：{str(e)}\n{'='*50}\n", True)
+            error_msg = (
+                f"\n{'='*80}\n"
+                f"❌ 错误：检查节点角色失败\n"
+                f"节点：{redis_client.connection_pool.connection_kwargs.get('host')}\n"
+                f"错误信息：{str(e)}\n"
+                f"{'='*80}\n"
+            )
+            logging.error(error_msg)
             return False
 
-    def _process_node(self, ip):
+    def _process_node(self, ip: str):
         """处理单个Redis节点"""
+        r = None
         try:
             # 创建Redis连接
             r = redis.StrictRedis(
-                host=ip,
-                port=self.port,
-                password=self.password,
-                socket_timeout=self.connect_timeout,
-                socket_connect_timeout=self.connect_timeout
+                connection_pool=self.pools[ip]
             )
             
             # 检查节点角色
@@ -123,12 +289,14 @@ class ClusterKeyDeleter:
             if not is_master:
                 if self.only_master:
                     if self.skip_slave:
-                        self._safe_print(f"\n{'='*50}\n跳过slave节点：{ip}\n{'='*50}\n", True)
+                        logging.info(f"Skipping slave node: {ip}")
+                        with self.stats_lock:
+                            self.stats['nodes_skipped'] += 1
                         return
                     else:
-                        self._safe_print(f"\n{'='*50}\n警告：{ip} 是slave节点，将尝试处理但可能会失败\n{'='*50}\n", True)
+                        logging.warning(f"Node {ip} is slave, will try to process but may fail")
                 else:
-                    self._safe_print(f"\n{'='*50}\n处理slave节点：{ip}\n{'='*50}\n", True)
+                    logging.info(f"Processing slave node: {ip}")
             
             # 创建pipeline
             pipeline = r.pipeline(transaction=False)
@@ -138,6 +306,10 @@ class ClusterKeyDeleter:
             # 开始scan
             cursor = 0
             while not self.stop_event:
+                if not self._check_memory():
+                    logging.error("Memory limit exceeded, stopping node processing")
+                    break
+                    
                 try:
                     # 扫描key
                     cursor, keys = self._retry_operation(
@@ -149,11 +321,13 @@ class ClusterKeyDeleter:
                     
                     if keys:
                         for key in keys:
+                            if self.stop_event:  # 检查是否需要停止
+                                return
                             if self.dry_run:
                                 self._write_to_file(f"dry run deleted key: {key}")
                             else:
                                 try:
-                                    self._write_to_file(f"{key.decode('utf-8')}")
+                                    self._write_to_file(f"{key}")
                                     pipeline.delete(key)
                                     pipeline_size += 1
                                     node_deleted += 1
@@ -164,72 +338,113 @@ class ClusterKeyDeleter:
                                             pipeline.execute()
                                             with self.total_deleted_lock:
                                                 self.total_deleted += pipeline_size
-                                            self._safe_print(f"Deleted {pipeline_size} keys from {ip}, node total: {node_deleted}, global total: {self.total_deleted}", True)
+                                            logging.info(f"Deleted {pipeline_size} keys from {ip}, node total: {node_deleted}, global total: {self.total_deleted}")
                                             pipeline_size = 0
                                             if self.delete_interval > 0:
                                                 time.sleep(self.delete_interval)
                                         except ReadOnlyError:
                                             if not is_master:
-                                                self._safe_print(f"\n{'='*50}\n错误：节点 {ip} 是slave节点，跳过删除操作\n{'='*50}\n", True)
+                                                logging.error(f"Node {ip} is slave, skipping delete operation")
                                             else:
-                                                self._safe_print(f"\n{'='*50}\n错误：节点 {ip} 变为只读状态，跳过删除操作\n{'='*50}\n", True)
+                                                logging.error(f"Node {ip} became read-only, skipping delete operation")
                                             return
                                         except ResponseError as e:
-                                            self._safe_print(f"Pipeline execution error on {ip}: {str(e)}", True)
+                                            logging.error(f"Pipeline execution error on {ip}: {str(e)}")
                                 except ReadOnlyError:
                                     if not is_master:
-                                        self._safe_print(f"\n{'='*50}\n错误：节点 {ip} 是slave节点，跳过删除操作\n{'='*50}\n", True)
+                                        logging.error(f"Node {ip} is slave, skipping delete operation")
                                     else:
-                                        self._safe_print(f"\n{'='*50}\n错误：节点 {ip} 变为只读状态，跳过删除操作\n{'='*50}\n", True)
+                                        logging.error(f"Node {ip} became read-only, skipping delete operation")
                                     return
                     
                     if cursor == 0:
                         break
                         
                 except Exception as e:
-                    self._safe_print(f"Error during scan operation on {ip}: {str(e)}", True)
+                    logging.error(f"Error during scan operation on {ip}: {str(e)}")
                     break
             
             # 执行剩余的pipeline命令
-            if pipeline_size > 0 and not self.dry_run:
+            if pipeline_size > 0 and not self.dry_run and not self.stop_event:
                 try:
                     pipeline.execute()
                     with self.total_deleted_lock:
                         self.total_deleted += pipeline_size
-                    self._safe_print(f"Deleted {pipeline_size} keys from {ip}, node total: {node_deleted}, global total: {self.total_deleted}", True)
+                    logging.info(f"Deleted {pipeline_size} keys from {ip}, node total: {node_deleted}, global total: {self.total_deleted}")
                 except ReadOnlyError:
                     if not is_master:
-                        self._safe_print(f"\n{'='*50}\n错误：节点 {ip} 是slave节点，跳过删除操作\n{'='*50}\n", True)
+                        logging.error(f"Node {ip} is slave, skipping delete operation")
                     else:
-                        self._safe_print(f"\n{'='*50}\n错误：节点 {ip} 变为只读状态，跳过删除操作\n{'='*50}\n", True)
+                        logging.error(f"Node {ip} became read-only, skipping delete operation")
                 except ResponseError as e:
-                    self._safe_print(f"Pipeline execution error on {ip}: {str(e)}", True)
+                    logging.error(f"Pipeline execution error on {ip}: {str(e)}")
             
-            self._safe_print(f"Finished processing node {ip}, total deleted: {node_deleted}", True)
+            with self.stats_lock:
+                self.stats['nodes_processed'] += 1
+            logging.info(f"Finished processing node {ip}, total deleted: {node_deleted}")
             
         except Exception as e:
-            self._safe_print(f"Error processing node {ip}: {str(e)}", True)
+            logging.error(f"Error processing node {ip}: {str(e)}")
+            with self.stats_lock:
+                self.stats['errors'] += 1
         finally:
-            if 'r' in locals():
+            if r is not None:
                 r.close()
 
     def delete_keys(self):
         """并发处理所有Redis节点"""
-        with concurrent.futures.ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-            futures = [executor.submit(self._process_node, ip) for ip in self.redis_ips]
-            for future in concurrent.futures.as_completed(futures):
+        try:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+                futures = [executor.submit(self._process_node, ip) for ip in self.redis_ips]
                 try:
-                    future.result()
-                except Exception as e:
-                    self._safe_print(f"Error in thread: {str(e)}", True)
+                    # 等待所有任务完成，设置超时时间
+                    for future in concurrent.futures.as_completed(futures, timeout=self.overall_timeout):
+                        try:
+                            future.result(timeout=self.task_timeout)
+                        except concurrent.futures.TimeoutError:
+                            logging.error(f"Task execution timeout after {self.task_timeout} seconds")
+                        except Exception as e:
+                            logging.error(f"Error in thread: {str(e)}")
+                except concurrent.futures.TimeoutError:
+                    logging.error(f"Overall execution timeout after {self.overall_timeout} seconds")
+                finally:
+                    # 取消所有未完成的任务
+                    for future in futures:
+                        if not future.done():
+                            future.cancel()
+                    logging.info("All tasks completed or cancelled")
+        except Exception as e:
+            logging.error(f"Error in thread pool: {str(e)}")
+        finally:
+            # 确保所有数据都写入文件
+            logging.info("Stopping file writer...")
+            self.stop_event = True
+            self.file_writer.stop()
+            logging.info("File writer stopped")
+            
+            # 打印最终统计信息
+            logging.info("Printing final statistics...")
+            self._print_stats()
+            
+            # 关闭所有连接池
+            logging.info("Closing Redis connection pools...")
+            for pool in self.pools.values():
+                pool.disconnect()
+            logging.info("All Redis connection pools closed")
         
-        self._safe_print(f"Finished deleting keys from all Redis nodes. Total deleted: {self.total_deleted}", True)
+        logging.info(f"Finished deleting keys from all Redis nodes. Total deleted: {self.total_deleted}")
+        logging.info("Program completed successfully")
 
     def signal_handler(self, sig, frame):
         """处理Ctrl+C信号"""
-        self._safe_print("Ctrl+C pressed. Shutting down gracefully.", True)
+        logging.info("Ctrl+C pressed. Shutting down gracefully.")
         self.stop_event = True
-        self._safe_print("Exiting...", True)
+        # 关闭所有连接池
+        for pool in self.pools.values():
+            pool.disconnect()
+        self.file_writer.stop()
+        self._print_stats()
+        logging.info("Exiting...")
         sys.exit(0)
 
 def main():
@@ -248,6 +463,13 @@ def main():
     parser.add_argument('--only-master', type=str, default='True', help='Only connect to master nodes (default: True)')
     parser.add_argument('--skip-slave', type=str, default='True', help='Skip slave nodes (default: True)')
     parser.add_argument('--output-file', type=str, default='audit.log', help='Output file path (default: audit.log)')
+    parser.add_argument('--buffer-size', type=int, default=1000, help='File write buffer size (default: 1000)')
+    parser.add_argument('--compress', type=str, default='False', help='Compress output file (default: False)')
+    parser.add_argument('--log-level', type=str, default='INFO', help='Logging level (default: INFO)')
+    parser.add_argument('--max-memory', type=int, default=1024, help='Maximum memory usage in MB (default: 1024)')
+    parser.add_argument('--stats-interval', type=int, default=60, help='Statistics output interval in seconds (default: 60)')
+    parser.add_argument('--task-timeout', type=int, default=3600, help='Timeout for each task in seconds (default: 3600)')
+    parser.add_argument('--overall-timeout', type=int, default=86400, help='Overall timeout in seconds (default: 86400)')
 
     args = parser.parse_args()
 
@@ -264,6 +486,10 @@ def main():
     skip_slave = True
     if args.skip_slave.lower() == 'false':
         skip_slave = False
+        
+    compress = False
+    if args.compress.lower() == 'true':
+        compress = True
 
     if not args.prefix:
         print("prefix cannot be empty", file=sys.stderr)
@@ -287,31 +513,47 @@ def main():
         password=args.password,
         only_master=only_master,
         skip_slave=skip_slave,
-        output_file=args.output_file
+        output_file=args.output_file,
+        buffer_size=args.buffer_size,
+        compress=compress,
+        log_level=args.log_level,
+        max_memory=args.max_memory,
+        stats_interval=args.stats_interval,
+        task_timeout=args.task_timeout,
+        overall_timeout=args.overall_timeout
     )
 
     # 设置信号处理
     signal.signal(signal.SIGINT, deleter.signal_handler)
 
     # 打印配置信息
-    print(
-        f'Configuration:\n'
-        f'  Redis IPs: {redis_ips}\n'
-        f'  Prefix: {args.prefix}\n'
-        f'  Scan count: {args.scan_count}\n'
-        f'  Pipeline size: {args.pipeline_size}\n'
-        f'  Delete interval: {args.delete_interval}ms\n'
-        f'  Dry run: {dry_run}\n'
-        f'  Connect timeout: {args.connect_timeout}s\n'
-        f'  Max retries: {args.max_retries}\n'
-        f'  Max workers: {args.max_workers}\n'
-        f'  Port: {args.port}\n'
-        f'  Password: {"*" * 8 if args.password else "None"}\n'
-        f'  Only master: {only_master}\n'
-        f'  Skip slave: {skip_slave}\n'
-        f'  Output file: {args.output_file}',
-        file=sys.stderr
-    )
+    config_info = {
+        'Redis IPs': redis_ips,
+        'Prefix': args.prefix,
+        'Scan count': args.scan_count,
+        'Pipeline size': args.pipeline_size,
+        'Delete interval': f"{args.delete_interval}ms",
+        'Dry run': dry_run,
+        'Connect timeout': f"{args.connect_timeout}s",
+        'Max retries': args.max_retries,
+        'Max workers': args.max_workers,
+        'Port': args.port,
+        'Password': "******" if args.password else "None",
+        'Only master': only_master,
+        'Skip slave': skip_slave,
+        'Output file': args.output_file,
+        'Buffer size': args.buffer_size,
+        'Compress': compress,
+        'Log level': args.log_level,
+        'Max memory': f"{args.max_memory}MB",
+        'Stats interval': f"{args.stats_interval}s",
+        'Task timeout': f"{args.task_timeout}s",
+        'Overall timeout': f"{args.overall_timeout}s"
+    }
+    
+    logging.info("Configuration:")
+    for key, value in config_info.items():
+        logging.info(f"  {key}: {value}")
 
     # 开始删除
     deleter.delete_keys()
