@@ -20,5 +20,8 @@ def a_function_requiring_decoration():
           "remove my foul smell")
 
 
-print(a_function_requiring_decoration())
+# print(a_function_requiring_decoration())
 # Output: a_function_requiring_decoration
+
+if __name__ == '__main__':
+    a_function_requiring_decoration()
