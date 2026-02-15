@@ -9,3 +9,8 @@ class TestBuiltIns(unittest.TestCase):
         l = list(zip(a, b))
         print(l)
         assert l == [(1, 'a'), (2, 'b'), (3, 'c')]
+
+        for l, x in zip(a, b):
+            print(l)
+            print(x)
+
