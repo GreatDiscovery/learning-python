@@ -1,5 +1,6 @@
 import unittest
 import torch
+from torch import nn
 
 
 class TestPytorchFunc(unittest.TestCase):
@@ -38,4 +39,40 @@ class TestPytorchFunc(unittest.TestCase):
         A = torch.tensor([[1., 2., 3.], ])
         B = A.softmax(dim=-1)
         print(B)
-        assert B[0][0]+B[0][1]+B[0][2] == 1
+        assert B[0][0] + B[0][1] + B[0][2] == 1
+
+    def test_linear(self):
+        # 定义线性层
+        linear = nn.Linear(3, 2)
+
+        # 构造一个输入 (batch_size=1, 3维)
+        x = torch.tensor([[1.0, 2.0, 3.0]])
+
+        # 前向计算
+        y = linear(x)
+
+        print("输入 x:")
+        print(x)
+
+        print("\n权重 W:")
+        print(linear.weight)
+
+        print("\n偏置 b:")
+        print(linear.bias)
+
+        print("\n输出 y:")
+        print(y)
+
+    def test_view(self):
+        # 在不改变数据的情况下，重新解释张量的形状,元素总数必须一样。
+        x = torch.arange(6)
+        print("原始 x:")
+        print(x)
+        print("shape:", x.shape)
+        assert x.shape[0] == 6
+
+        y = x.view(2, 3)
+        print("\nview 之后:")
+        print(y)
+        print("shape:", y.shape)
+        assert y.shape == (2, 3)
