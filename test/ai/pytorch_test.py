@@ -65,6 +65,7 @@ class TestPytorchFunc(unittest.TestCase):
 
     def test_view(self):
         # 在不改变数据的情况下，重新解释张量的形状,元素总数必须一样。
+        # PyTorch 的 .view() 要求张量是 contiguous，否则会报错，所以必须先 .contiguous()。
         x = torch.arange(6)
         print("原始 x:")
         print(x)
