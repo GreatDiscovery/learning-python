@@ -81,3 +81,22 @@ class TestPytorchFunc(unittest.TestCase):
         z = x.view(-1, 3)
         assert z.shape == (2, 3)
 
+    def test_unsqueeze(self):
+        # 在指定位置插入一个长度为1的维度。unsqueeze 本质是：在张量结构外面“包一层括号”。
+        x = torch.tensor([1, 2, 3])
+        print("原始 x:")
+        print(x)
+        print("shape:", x.shape)
+
+        y = torch.unsqueeze(x, 0)
+        print("\n在 dim=0 插入维度:")
+        print(y)
+        print("shape:", y.shape)
+        assert y.shape == (1, 3)
+
+        a = torch.tensor([[1, 2, 3], [4, 5, 6], [7, 8, 9]])
+        print(a)
+        print("shape:", a.shape)
+        b = torch.unsqueeze(a, 1)
+        print(b)
+        print("shape:", b.shape)
