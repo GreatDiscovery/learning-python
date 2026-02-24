@@ -76,3 +76,7 @@ class TestPytorchFunc(unittest.TestCase):
         print(y)
         print("shape:", y.shape)
         assert y.shape == (2, 3)
+
+        z = x.view(-1, 3)
+        assert z.shape == (2, 3)
+

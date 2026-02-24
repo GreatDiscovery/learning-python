@@ -14,3 +14,8 @@ class TestBuiltIns(unittest.TestCase):
             print(l)
             print(x)
 
+        c = list(zip(a, (4, 5, 6)))
+        print(c)
+
+
+
