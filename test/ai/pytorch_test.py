@@ -100,3 +100,9 @@ class TestPytorchFunc(unittest.TestCase):
         b = torch.unsqueeze(a, 1)
         print(b)
         print("shape:", b.shape)
+
+    def test_ones(self):
+        x = torch.ones(1, 1, 10)
+        print(x)
+        assert x.shape == (1, 1, 10)
+
