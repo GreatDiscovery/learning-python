@@ -32,7 +32,8 @@ class TestAgent(unittest.TestCase):
             return a + b
 
         # 2️⃣ 模型
-        model = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+        # start llm server： vllm serve Qwen/Qwen2.5-0.5B-Instruct --enable-auto-tool-choice --tool-call-parser hermes
+        model = ChatOpenAI(model="Qwen/Qwen2.5-0.5B-Instruct", base_url="http://localhost:8000/v1", temperature=0)
 
         # 3️⃣ 创建Agent（新版）
         agent = create_agent(
@@ -45,4 +46,4 @@ class TestAgent(unittest.TestCase):
             {"messages": [{"role": "user", "content": "3加5是多少"}]}
         )
 
-        print(result["messages"][-1]["content"])
+        print(result["messages"][-1].content)
