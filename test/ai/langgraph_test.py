@@ -9,7 +9,9 @@ from langchain.tools import tool
 from langchain.chat_models import init_chat_model
 
 model = init_chat_model(
-    model="gpt-5-mini",
+    model=os.environ['MODEL_ID'],
+    api_key=os.environ['API_KEY'],
+    base_url=os.environ['BASE_URL'],
     model_provider="openai",
     temperature=0
 )
@@ -146,10 +148,13 @@ agent_builder.add_edge("tool_node", "llm_call")
 # Compile the agent
 agent = agent_builder.compile()
 
-from IPython.display import Image, display
+# from IPython.display import Image, display
+#
+# # Show the agent
+# display(Image(agent.get_graph(xray=True).draw_mermaid_png()))
 
-# Show the agent
-display(Image(agent.get_graph(xray=True).draw_mermaid_png()))
+with open("agent_graph.png", "wb") as f:
+    f.write(agent.get_graph(xray=True).draw_mermaid_png())
 
 if __name__ == '__main__':
     # Invoke
