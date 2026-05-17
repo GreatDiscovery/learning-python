@@ -1,4 +1,9 @@
 # Step 1: Define tools and model
+from dotenv import load_dotenv
+
+# 加载环境变量
+load_dotenv()
+import os
 
 from langchain.tools import tool
 from langchain.chat_models import init_chat_model
@@ -147,11 +152,6 @@ from IPython.display import Image, display
 display(Image(agent.get_graph(xray=True).draw_mermaid_png()))
 
 if __name__ == '__main__':
-    from dotenv import load_dotenv
-
-    # 加载环境变量
-    load_dotenv()
-
     # Invoke
     from langchain.messages import HumanMessage
 
