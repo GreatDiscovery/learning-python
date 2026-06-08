@@ -33,3 +33,8 @@ if __name__ == '__main__':
 
     config: RunnableConfig = {"configurable": {"thread_id": "1"}}
     graph.invoke({"foo": "", "bar": []}, config)
+
+    snapshotStat = graph.get_state(config)
+    print(snapshotStat)
+
+
