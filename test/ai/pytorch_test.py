@@ -128,3 +128,16 @@ class TestPytorchFunc(unittest.TestCase):
         y = x + 0.01 * x
         y.backward()
         print("残差网络梯度:", x.grad.item())
+
+    def test_relu(self):
+        # 创建 ReLU 激活函数
+        relu = nn.ReLU()
+
+        # 输入张量
+        x = torch.tensor([-3.0, -1.0, 0.0, 2.0, 5.0])
+
+        # 执行 ReLU
+        y = relu(x)
+
+        print("输入:", x)
+        print("输出:", y)
