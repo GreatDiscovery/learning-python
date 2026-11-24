@@ -106,3 +106,11 @@ class TestPytorchFunc(unittest.TestCase):
         print(x)
         assert x.shape == (1, 1, 10)
 
+
+    def test_drop_out(self):
+        m = nn.Dropout(p=0.2)
+        input = torch.randn(1, 16)
+        print(input)
+        output = m(input)
+        print(output)
+
