@@ -106,7 +106,6 @@ class TestPytorchFunc(unittest.TestCase):
         print(x)
         assert x.shape == (1, 1, 10)
 
-
     def test_drop_out(self):
         m = nn.Dropout(p=0.2)
         input = torch.randn(1, 16)
@@ -114,3 +113,18 @@ class TestPytorchFunc(unittest.TestCase):
         output = m(input)
         print(output)
 
+    def test_residual(self):
+        x = torch.tensor(2.0, requires_grad=True)
+
+        # 普通网络
+        y = 0.01 * x
+        y.backward()
+        print("普通网络梯度:", x.grad.item())
+
+        # 清理梯度
+        x.grad.zero_()
+
+        # 残差网络
+        y = x + 0.01 * x
+        y.backward()
+        print("残差网络梯度:", x.grad.item())
