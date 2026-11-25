@@ -17,5 +17,13 @@ class TestBuiltIns(unittest.TestCase):
         c = list(zip(a, (4, 5, 6)))
         print(c)
 
+    def test_dict(self):
+        class Worker:
+            def __init__(self):
+                self.block_size = 32
+                self.device = "cpu"
 
+        worker = Worker()
+        print(worker.__dict__)
+        # {'block_size': 32, 'device': 'cpu'}
 
